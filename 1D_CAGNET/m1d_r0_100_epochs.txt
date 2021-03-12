@@ -1,0 +1,12 @@
+rank: 0 total_time: 20.69611954689026
+rank: 0 comm_time: 5.8434739112854
+rank: 0 comp_time: 15.112119436264038
+rank: 0 comp_localA_time: 7.159419536590576
+rank: 0 comp_sep_times: defaultdict(<class 'float'>, {0: 0.34995102882385254, 1: 0.07511639595031738})
+rank: 0 scomp_time: 13.974400043487549
+rank: 0 dcomp_time: 1.1377193927764893
+rank: 0 bcast_comm_time: 5.81446385383606
+rank: 0 barrier_time: 20.088578939437866
+rank: 0 barrier_subset_time: 0.0
+rank: 0 op1_comm_time: 0.0
+rank: 0 op2_comm_time: 0.02901005744934082
