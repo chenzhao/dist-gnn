@@ -30,7 +30,7 @@ def dist_log(*args, sep=True):
             print(*args)
 
 
-def dist_bootstrap(rank, dist_main, coo_adj_matrix, features, labels, num_classes, args):  # called by torch with rank
+def dist_bootstrap(rank, dist_main, A_blocks, A_block_seps, H_blocks, labels, num_classe, args):  # called by torch with rank
     global g_world_size , g_rank , device
     g_world_size = nprocs
     g_rank = rank
@@ -53,7 +53,7 @@ def dist_bootstrap(rank, dist_main, coo_adj_matrix, features, labels, num_classe
             g_p2p_group_dict[(dst, src)] = g_p2p_group_dict[(src, dst)]
     dist_log('P2P groups inited', each=False)
 
-    dist_main(g_rank, g_world_size, coo_adj_matrix, features, labels, num_classes, args)
+    dist_main(g_rank, g_world_size, A_blocks, A_block_seps, H_blocks, labels, num_classes, args)
 
 
 def main():
@@ -70,10 +70,10 @@ def main():
     args = parser.parse_args()
     print(args)
 
-    coo_adj_matrix, features, labels, num_classes = dist_data_util.load_data(args)
-    coo_adj_matrix_parts, features_parts =  dist_data_util.partition_1D(coo_adj_matrix, features, args.nprocs)
+    A, H, labels, num_classes = dist_data_util.load_data(args) # coo_adj_matrix, features
+    A_blocks, A_block_seps, H_blocks = dist_data_util.partition_1D(A, H, args.nprocs)
 
-    dist_boot_args=(gcn_distr.dist_main, coo_adj_matrix_parts, features_parts, labels, num_classes, args)
+    dist_boot_args=(gcn_distr.dist_main, A_blocks, A_block_seps, H_blocks, labels, num_classes, args)
     torch.multiprocessing.spawn(dist_bootstrap, dist_boot_args, args.nprocs)  # do not killing 1 by 1.
 
 
