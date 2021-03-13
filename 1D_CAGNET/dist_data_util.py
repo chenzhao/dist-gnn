@@ -107,7 +107,7 @@ def partition_1D(P, A, H):
         A_blocks[i] = torch.sparse_coo_tensor(A_blocks[i], coo_values, size=(n, row_size))
         # am_partitions[i] = scale_elements(adj_matrix, am_partitions[i], node_count,  0, vtx_indices[i])
 
-    H_blocks = torch.split(inputs, n_per_proc, dim=0)
+    H_blocks = torch.split(H, n_per_proc, dim=0)
 
     # print(f"rank: {rank} A.size: {A.size()}", flush=True)
     # print(f"rank: {rank} inputs.size: {inputs.size()}", flush=True)

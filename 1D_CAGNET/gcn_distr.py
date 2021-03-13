@@ -358,26 +358,12 @@ def test(outputs, data, vertex_count, rank):
         accs.append(0)
 
     return accs
-    # logits, accs = outputs, []
-    # datay_rank = torch.split(data.y, vertex_count)[rank]
-    # for _, mask in data('train_mask', 'val_mask', 'test_mask'):
-    #     mask_rank = torch.split(mask, vertex_count)[rank]
-    #     count = mask_rank.nonzero().size(0)
-    #     if count > 0:
-    #         pred = logits[mask_rank].max(1)[1]
-    #         acc = pred.eq(datay_rank[mask_rank]).sum().item() / mask_rank.sum().item()
-    #         # pred = logits[mask].max(1)[1]
-    #         # acc = pred.eq(data.y[mask]).sum().item() / mask.sum().item()
-    #     else:
-    #         acc = -1
-    #     accs.append(acc)
-    # return accs
 
 
-
-
-def dist_main(g_rank, g_world_size, coo_adj_matrix, features, labels, num_classes, args):
-# def run(rank, size, inputs, adj_matrix, data, features, classes, device):
+from dist_start import g_rank, g_world_size
+def dist_main(tg_rank, tg_world_size, A_blocks, A_block_seps, H_blocks, labels, num_classes, args):
+    print('in distmain', g_rank, g_world_size)
+    return
     best_val_acc = test_acc = 0
     outputs = None
 
@@ -426,7 +412,6 @@ def dist_main(g_rank, g_world_size, coo_adj_matrix, features, labels, num_classe
 
     # Get median runtime according to rank0 and print that run's breakdown
     dist.barrier(group)
-
         
     with open('m1d_r%d_%d_epochs.txt'%(rank, args.epochs), 'wt') as f:
         print(f"rank: {rank} total_time: {total_time[rank]}", file=f)
@@ -486,150 +471,6 @@ def dist_main(g_rank, g_world_size, coo_adj_matrix, features, labels, num_classe
         print('Train: {:.4f}, Val: {:.4f}, Test: {:.4f}'.format(train_acc, best_val_acc, test_acc))
 
     return outputs
-
-
-
-def load_data(args):
-    path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', args.graphname)
-    if args.graphname == "Cora":
-        pyg_dataset = Planetoid(path, args.graphname, transform=T.NormalizeFeatures())
-    elif args.graphname == "Reddit":
-        pyg_dataset = Reddit(path, transform=T.NormalizeFeatures())
-    pyg_data = pyg_dataset[0]
-    features = pyg_data.x 
-    labels = pyg_data.y
-    coo_edge_index = pyg_data.edge_index
-    num_classes = pyg_data.num_classes
-
-    if args.normalization:
-        coo_adj_matrix, _ = add_remaining_self_loops(coo_edge_index, num_nodes=pyg_data.num_nodes)
-    else:
-        coo_adj_matrix = coo_edge_index
-    return coo_adj_matrix, features, labels, num_classes
-
-# Split a COO into partitions of size n_per_proc
-# Basically torch.split but for Sparse Tensors since pytorch doesn't support that.
-def split_coo(adj_matrix, node_count, n_per_proc, dim):
-    vtx_indices = list(range(0, node_count, n_per_proc))
-    vtx_indices.append(node_count)
-
-    am_partitions = []
-    for i in range(len(vtx_indices) - 1):
-        am_part = adj_matrix[:,(adj_matrix[dim,:] >= vtx_indices[i]).nonzero(as_tuple=False).squeeze(1)]
-        am_part = am_part[:,(am_part[dim,:] < vtx_indices[i + 1]).nonzero(as_tuple=False).squeeze(1)]
-        am_part[dim] -= vtx_indices[i]
-        am_partitions.append(am_part)
-
-    return am_partitions, vtx_indices
-
-# Normalize all elements according to KW's normalization rule
-def scale_elements(adj_matrix, adj_part, node_count, row_vtx, col_vtx):
-    if not args.normalization:
-        return adj_part
-
-    # Scale each edge (u, v) by 1 / (sqrt(u) * sqrt(v))
-    # indices = adj_part._indices()
-    # values = adj_part._values()
-
-    # deg_map = dict()
-    # for i in range(adj_part._nnz()):
-    #     u = indices[0][i] + row_vtx
-    #     v = indices[1][i] + col_vtx
-
-    #     if u.item() in deg_map:
-    #         degu = deg_map[u.item()]
-    #     else:
-    #         degu = (adj_matrix[0] == u).sum().item()
-    #         deg_map[u.item()] = degu
-
-    #     if v.item() in deg_map:
-    #         degv = deg_map[v.item()]
-    #     else:
-    #         degv = (adj_matrix[0] == v).sum().item()
-    #         deg_map[v.item()] = degv
-
-    #     values[i] = values[i] / (math.sqrt(degu) * math.sqrt(degv))
-    
-    adj_part = adj_part.coalesce()
-    deg = torch.histc(adj_matrix[0].double(), bins=node_count)
-    deg = deg.pow(-0.5)
-
-    row_len = adj_part.size(0)
-    col_len = adj_part.size(1)
-
-    dleft = torch.sparse_coo_tensor([np.arange(0, row_len).tolist(),
-                                     np.arange(0, row_len).tolist()],
-                                     deg[row_vtx:(row_vtx + row_len)].float(),
-                                     size=(row_len, row_len),
-                                     requires_grad=False, device=torch.device("cpu"))
-
-    dright = torch.sparse_coo_tensor([np.arange(0, col_len).tolist(),
-                                     np.arange(0, col_len).tolist()],
-                                     deg[col_vtx:(col_vtx + col_len)].float(),
-                                     size=(col_len, col_len),
-                                     requires_grad=False, device=torch.device("cpu"))
-    # adj_part = torch.sparse.mm(torch.sparse.mm(dleft, adj_part), dright)
-    ad_ind, ad_val = torch_sparse.spspmm(adj_part._indices(), adj_part._values(), 
-                                            dright._indices(), dright._values(),
-                                            adj_part.size(0), adj_part.size(1), dright.size(1))
-
-    adj_part_ind, adj_part_val = torch_sparse.spspmm(dleft._indices(), dleft._values(), 
-                                                        ad_ind, ad_val,
-                                                        dleft.size(0), dleft.size(1), adj_part.size(1))
-
-    adj_part = torch.sparse_coo_tensor(adj_part_ind, adj_part_val, 
-                                                size=(adj_part.size(0), adj_part.size(1)),
-                                                requires_grad=False, device=torch.device("cpu"))
-    return adj_part
-
-def partition_1D(rank, size, inputs, adj_matrix, data, features, classes, device):
-    node_count = inputs.size(0)
-    n_per_proc = math.ceil(float(node_count) / size)
-
-    am_partitions = None
-    am_pbyp = None
-
-    with torch.no_grad():
-        # Column partitions
-        am_partitions, vtx_indices = split_coo(adj_matrix, node_count, n_per_proc, 1)
-
-        proc_node_count = vtx_indices[rank + 1] - vtx_indices[rank]
-        am_pbyp, _ = split_coo(am_partitions[rank], node_count, n_per_proc, 0)
-        for i in range(len(am_pbyp)):
-            if i == size - 1:
-                last_node_count = vtx_indices[i + 1] - vtx_indices[i]
-                am_pbyp[i] = torch.sparse_coo_tensor(am_pbyp[i], torch.ones(am_pbyp[i].size(1)).to(device), 
-                                                        size=(last_node_count, proc_node_count),
-                                                        requires_grad=False)
-
-                am_pbyp[i] = scale_elements(adj_matrix, am_pbyp[i], node_count, vtx_indices[i], 
-                                                vtx_indices[rank])
-            else:
-                am_pbyp[i] = torch.sparse_coo_tensor(am_pbyp[i], torch.ones(am_pbyp[i].size(1)).to(device), 
-                                                        size=(n_per_proc, proc_node_count),
-                                                        requires_grad=False)
-
-                am_pbyp[i] = scale_elements(adj_matrix, am_pbyp[i], node_count, vtx_indices[i], 
-                                                vtx_indices[rank])
-
-        for i in range(len(am_partitions)):
-            proc_node_count = vtx_indices[i + 1] - vtx_indices[i]
-            am_partitions[i] = torch.sparse_coo_tensor(am_partitions[i], 
-                                                    torch.ones(am_partitions[i].size(1)).to(device), 
-                                                    size=(node_count, proc_node_count), 
-                                                    requires_grad=False)
-            am_partitions[i] = scale_elements(adj_matrix, am_partitions[i], node_count,  0, vtx_indices[i])
-
-        input_partitions = torch.split(inputs, math.ceil(float(inputs.size(0)) / size), dim=0)
-
-        adj_matrix_loc = am_partitions[rank]
-        inputs_loc = input_partitions[rank]
-    inputs_loc.requires_grad_(False) # does not work on 1.7.1 for unkown reason
-
-    inputs_loc = torch.tensor(inputs_loc, requires_grad = False)
-    print(f"rank: {rank} adj_matrix_loc.size: {adj_matrix_loc.size()}", flush=True)
-    print(f"rank: {rank} inputs.size: {inputs.size()}", flush=True)
-    return inputs_loc, adj_matrix_loc, am_pbyp
 
 
 
