@@ -10,7 +10,7 @@ from torch_geometric.data import (InMemoryDataset, Data, download_url,
 
 from torch_geometric.utils.convert import to_networkx
 import networkx 
-import metis
+#import metis
 
 
 class Reddit(InMemoryDataset):
@@ -36,9 +36,9 @@ class Reddit(InMemoryDataset):
         super(Reddit, self).__init__(root, transform, pre_transform)
         # self.process_with_partition()
         self.data, self.slices = torch.load(self.processed_paths[0])
-        self.partition(self[0])
-        torch.save(self.collate([self.data]), self.processed_paths[0])
-        print('partitioned graph saved')
+        # self.partition(self[0])
+        #torch.save(self.collate([self.data]), self.processed_paths[0])
+        # print('partitioned graph saved')
 
     @property
     def raw_file_names(self):

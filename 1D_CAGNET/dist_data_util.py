@@ -21,12 +21,13 @@ def load_data(args):
     if args.graphname == "Cora":
         pyg_dataset = Planetoid(path, args.graphname, transform=T.NormalizeFeatures())
     elif args.graphname == "Reddit":
-        pyg_dataset = Reddit(path, transform=T.NormalizeFeatures())
+        pyg_dataset = Reddit(path)
+        # pyg_dataset = Reddit(path, transform=T.NormalizeFeatures())
     pyg_data = pyg_dataset[0]
     features = pyg_data.x 
     labels = pyg_data.y
     coo_edge_index = pyg_data.edge_index
-    num_classes = pyg_data.num_classes
+    num_classes = pyg_dataset.num_classes
 
     if args.normalization:
         coo_adj_matrix, _ = add_remaining_self_loops(coo_edge_index, num_nodes=pyg_data.num_nodes)
@@ -87,19 +88,44 @@ def scale_elements(adj_matrix, adj_part, node_count, row_vtx, col_vtx):
                                                 requires_grad=False, device=torch.device("cpu"))
     return adj_part
 
+def partition_1D(A, H, P, rank):
+    n = H.size(0)
+    n_per_proc = math.ceil(n/P)
+    A_blocks, node_indices = split_coo(A, n, n_per_proc, dim=1) # Column partitions
+    H_blocks = torch.split(H, n_per_proc, dim=0)
+    for i in range(P):
+        if i!=rank:
+            continue
+        row_size = node_indices[i+1] - node_indices[i]
+        Ai_blocks, _ = split_coo(A_blocks[i], n, n_per_proc, dim=0)
+        for j in range(P):
+            col_size = node_indices[j+1] - node_indices[j]
+            coo_values = torch.ones(Ai_blocks[j].size(1))
+            print('rank', rank, 'size', col_size, row_size)
+            Ai_blocks[j] = torch.sparse_coo_tensor(Ai_blocks[j], coo_values, size=(col_size, row_size))
+            # Ai_blocks[j] = scale_elements(A, Ai_blocks[j], node_count, vtx_indices[i], vtx_indices[rank])
 
-def partition_1D(P, A, H):
+        coo_values = torch.ones(A_blocks[i].size(1))
+        A_blocks[i] = torch.sparse_coo_tensor(A_blocks[i], coo_values, size=(n, row_size))
+        print(rank, 'final size', A_blocks[i].size(),  H_blocks[i].size())
+        for b in Ai_blocks:
+            print(rank, 'block', b.size())
+        return A_blocks[i], Ai_blocks, H_blocks[i]
+        # am_partitions[i] = scale_elements(adj_matrix, am_partitions[i], node_count,  0, vtx_indices[i])
+
+
+def partition_1D_all(A, H, P):
     n = H.size(0)
     n_per_proc = math.ceil(n/P)
     A_blocks, node_indices = split_coo(A, n, n_per_proc, dim=1) # Column partitions
     A_block_seps = []
     for i in range(P):
-        Ai_blocks, _ = split_coo(A_blocks[i], node_count, n_per_proc, dim=0)
         row_size = node_indices[i+1] - node_indices[i]
+        Ai_blocks, _ = split_coo(A_blocks[i], n, n_per_proc, dim=0)
         for j in range(P):
             col_size = node_indices[j+1] - node_indices[j]
             coo_values = torch.ones(Ai_blocks[j].size(1))
-            Ai_blocks[j] = torch.sparse_coo_tensor(Ai_blocks[j], coo_values, size=(row_size, col_size))
+            Ai_blocks[j] = torch.sparse_coo_tensor(Ai_blocks[j], coo_values, size=(col_size, row_size))
             # Ai_blocks[j] = scale_elements(A, Ai_blocks[j], node_count, vtx_indices[i], vtx_indices[rank])
         A_block_seps.append(Ai_blocks)
 
