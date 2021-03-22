@@ -1,4 +1,5 @@
 import os
+import  math
 import datetime as dt
 import os.path as osp
 import numpy as np
@@ -10,6 +11,7 @@ from torch_geometric.data import (InMemoryDataset, Data, download_url,
                                   extract_zip)
 
 from torch_sparse import coalesce
+from torch_geometric.utils import add_remaining_self_loops
 from torch_geometric.utils.convert import to_networkx
 
 print(__file__, 'imported')
@@ -17,11 +19,67 @@ print(__file__, 'imported')
 #import metis
 
 
+def fast_sym_lap(edge_index):
+    uniques, inverse, counts = torch.unique(edge_index[0], sorted=True, return_inverse=True, return_counts=True)
+    d_rsqrt = torch.rsqrt(counts.to(torch.double))
+    edge_count = edge_index.size(1)
+    sym_lap_values = torch.zeros(edge_count)
+    prog_size =  edge_count//100
+    for i in range(edge_count):
+        # d_u = d_rsqrt[inverse[i]]
+        u = edge_index[0][i] 
+        v = edge_index[1][i]
+        d_u = d_rsqrt[u]
+        d_v = d_rsqrt[v]
+        sym_lap_values[i] = d_u*d_v
+        if i%prog_size==0:
+            print('slow normalization to 100:', i//prog_size)
+    return sym_lap_values
+
+
+def sym_lap(self):
+    print('slow normalization begin')
+    indices = self.edge_index
+    values = torch.zeros(indices.size(1))
+    deg_map = dict()
+    total = indices.size(1)
+    prog_size =  total//100
+    for i in range(indices.size(1)):
+        u = indices[0][i] 
+        v = indices[1][i]
+        if u.item() in deg_map:
+            degu = deg_map[u.item()]
+        else:
+            degu = (indices[0] == u).sum().item()
+            deg_map[u.item()] = degu
+        if v.item() in deg_map:
+            degv = deg_map[v.item()]
+        else:
+            degv = (indices[0] == v).sum().item()
+            deg_map[v.item()] = degv
+        values[i] = 1 / (math.sqrt(degu) * math.sqrt(degv))
+        if i%prog_size==0:
+            print('slow normalization to 100:', i//prog_size)
+    print('slow normalization end')
+    return values
+
+def normalize_features(x):
+    x = x / x.sum(1, keepdim=True).clamp(min=1)
+    return x
+
 class SmallerReddit(InMemoryDataset):
     url = 'https://data.dgl.ai/dataset/reddit.zip'
     def __init__(self, root, transform=None, pre_transform=None):
         super().__init__(root, transform, pre_transform)
         self.data, self.slices = torch.load(self.processed_paths[0])
+
+        d = self.data
+        print('original size', d.edge_index.size())
+        d.edge_index, _ = add_remaining_self_loops(d.edge_index, num_nodes=d.x.size(0))
+        print('self loop size', d.edge_index.size())
+
+        torch.save({"x":normalize_features(d.x), "y":d.y, "edge_index":d.edge_index, "sym_lap":fast_sym_lap(d.edge_index),
+                    "masks":(d.train_mask, d.val_mask, d.test_mask)}, self.processed_paths[0]+".fast")
 
     @property
     def raw_file_names(self):
@@ -76,7 +134,13 @@ class Reddit(InMemoryDataset):
         # self.process_with_partition()
         self.data, self.slices = torch.load(self.processed_paths[0])
         # self.partition(self[0])
-        # torch.save(self.collate([self.data]), self.processed_paths[0])
+        d = self.data
+
+    
+        d.edge_index, _ = add_remaining_self_loops(d.edge_index, num_nodes=d.x.size(0))
+
+        torch.save({"x":normalize_features(d.x), "y":d.y, "edge_index":d.edge_index,"sym_lap":fast_sym_lap(d.edge_index),
+                    "masks":(d.train_mask, d.val_mask, d.test_mask)}, self.processed_paths[0]+".fast")
         # print('partitioned graph saved')
 
     @property
@@ -212,36 +276,66 @@ def check_partition_connection(data, GPU=8):
 
 
 def main():
-    device = torch.device('cuda', 5)
-
     begin = dt.datetime.now()
+
+    path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', 'Reddit')
+    dataset = Reddit(path)
+    return
     path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', 'SmallerReddit')
     dataset = SmallerReddit(path)
+
+    return
+
+
     data = dataset[0]
 
     load_t = dt.datetime.now()
     print('data loading time:', load_t-begin)
 
-    print('train nodes amount:', sum(data.train_mask))
-    print('test nodes amount:', sum(data.test_mask))
-    print('val nodes amount:', sum(data.val_mask))
-    print('features:', data.x.size())
-    print('y:', data.y.size())
-    print('edges :', data.edge_index.size())
+    device = torch.device('cuda', 5)
+    torch.cuda.synchronize(device)
+
+    # print('train nodes amount:', sum(data.train_mask))
+    # print('test nodes amount:', sum(data.test_mask))
+    # print('val nodes amount:', sum(data.val_mask))
+    # print('features:', data.x.size())
+    # print('y:', data.y.size())
+    # print('edges :', data.edge_index.size())
 
     eval_t = dt.datetime.now()
     print('data eval time:', eval_t-load_t)
 
     torch.cuda.synchronize()
+    # print('sizes:', data.x.size(), data.y.size(), data.edge_index.size())
+
+    cuda_t = dt.datetime.now()
+    print('cuda sync time:', cuda_t-eval_t)
+
     x = data.x.to(device)
+    torch.cuda.synchronize()
+    x_t = dt.datetime.now()
+    print('x to gpu time:', x_t-cuda_t)
+
     y = data.y.to(device)
+    torch.cuda.synchronize()
+    y_t = dt.datetime.now()
+    print('y to gpu time:', y_t-x_t)
+    # print('y to gpu time:', y_t-x_t)
+
+    x = data.x.to(device)
+    torch.cuda.synchronize()
+    x_t = dt.datetime.now()
+    print('x to gpu time:', x_t-y_t)
+
     e = data.edge_index.to(device)
     torch.cuda.synchronize()
+    e_t = dt.datetime.now()
+    print('edge to gpu time:', e_t-y_t)
 
-    to_t = dt.datetime.now()
-    print('data to gpu time:', to_t-eval_t)
-
+    torch.cuda.synchronize()
     end = dt.datetime.now()
+    print('all data to gpu time:', end-cuda_t)
+
     print('total time:', end-begin)
 
 

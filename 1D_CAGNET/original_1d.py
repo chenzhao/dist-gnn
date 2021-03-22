@@ -5,14 +5,16 @@ import argparse
 import math
 
 import torch
+import torch.sparse
 import torch.distributed as dist
 
-from torch_geometric.data import Data, Dataset
-from torch_geometric.datasets import Planetoid, PPI
-from reddit import Reddit
-from torch_geometric.nn import GCNConv, ChebConv  # noqa
-from torch_geometric.utils import add_remaining_self_loops, to_dense_adj, dense_to_sparse, to_scipy_sparse_matrix
-import torch_geometric.transforms as T
+# from torch_geometric.data import Data, Dataset
+# from torch_geometric.datasets import Planetoid, PPI
+#from reddit import Reddit
+from fast_reddit import Reddit, SmallerReddit
+# from torch_geometric.nn import GCNConv, ChebConv  # noqa
+# from torch_geometric.utils import add_remaining_self_loops, to_dense_adj, dense_to_sparse, to_scipy_sparse_matrix
+# import torch_geometric.transforms as T
 
 import torch.multiprocessing as mp
 
@@ -21,8 +23,8 @@ from torch.multiprocessing import Manager, Process
 from torch.nn import Parameter
 import torch.nn.functional as F
 
-from torch_scatter import scatter_add
-import torch_sparse
+# from torch_scatter import scatter_add
+# import torch_sparse
 
 from sparse_coo_tensor_cpp import sparse_coo_tensor_gpu, spmm_gpu
 
@@ -417,7 +419,7 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, data, 
 
 def test(outputs, data, vertex_count, rank):
     logits, accs = outputs, []
-    for _, mask in data('train_mask', 'val_mask', 'test_mask'):
+    for mask in [data.train_mask, data.val_mask, data.test_mask]:
         pred = logits[mask].max(1)[1]
         acc = pred.eq(data.y[mask]).sum().item() / mask.sum().item()
         accs.append(acc)
@@ -443,6 +445,23 @@ def test(outputs, data, vertex_count, rank):
     # return accs
 
 
+def split_coo_with_values(adj_matrix, adj_values, node_count, n_per_proc, dim):
+    vtx_indices = list(range(0, node_count, n_per_proc))
+    vtx_indices.append(node_count)
+
+    am_partitions = []
+    av_partitions = []
+    for i in range(len(vtx_indices) - 1):
+        mask = ((adj_matrix[dim,:] >= vtx_indices[i]) & (adj_matrix[dim,:] < vtx_indices[i + 1])).nonzero().squeeze(1)
+        am_part = adj_matrix[:,mask]
+        am_part[dim] -= vtx_indices[i]
+        am_partitions.append(am_part)
+
+        av_part = adj_values[mask]
+        av_partitions.append(av_part)
+
+    return am_partitions, av_partitions, vtx_indices
+
 # Split a COO into partitions of size n_per_proc
 # Basically torch.split but for Sparse Tensors since pytorch doesn't support that.
 def split_coo(adj_matrix, node_count, n_per_proc, dim):
@@ -458,8 +477,37 @@ def split_coo(adj_matrix, node_count, n_per_proc, dim):
 
     return am_partitions, vtx_indices
 
+
+def slow_slow_scale(adj_matrix, adj_part, node_count, row_vtx, col_vtx):
+    print('slow normalization begin')
+    indices = adj_part._indices()
+    values = adj_part._values()
+
+    deg_map = dict()
+    for i in range(adj_part._nnz()):
+        u = indices[0][i] + row_vtx
+        v = indices[1][i] + col_vtx
+
+        if u.item() in deg_map:
+            degu = deg_map[u.item()]
+        else:
+            degu = (adj_matrix[0] == u).sum().item()
+            deg_map[u.item()] = degu
+
+        if v.item() in deg_map:
+            degv = deg_map[v.item()]
+        else:
+            degv = (adj_matrix[0] == v).sum().item()
+            deg_map[v.item()] = degv
+
+        values[i] = values[i] / (math.sqrt(degu) * math.sqrt(degv))
+    print('slow normalization end')
+    return adj_part
+
 # Normalize all elements according to KW's normalization rule
 def scale_elements(adj_matrix, adj_part, node_count, row_vtx, col_vtx):
+    # Scale each edge (u, v) by 1 / (sqrt(u) * sqrt(v))
+    # return slow_slow_scale(adj_matrix, adj_part, node_count, row_vtx, col_vtx)
     if not normalization:
         return adj_part
 
@@ -519,7 +567,7 @@ def scale_elements(adj_matrix, adj_part, node_count, row_vtx, col_vtx):
 
     return adj_part
 
-def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, device):
+def oned_partition(rank, size, inputs, adj_matrix, adj_values, data, features, classes, device):
     node_count = inputs.size(0)
     n_per_proc = math.ceil(float(node_count) / size)
 
@@ -530,34 +578,36 @@ def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, devi
     # TODO: Maybe I do want grad here. Unsure.
     with torch.no_grad():
         # Column partitions
-        am_partitions, vtx_indices = split_coo(adj_matrix, node_count, n_per_proc, 1)
+        #am_partitions, vtx_indices = split_coo(adj_matrix, node_count, n_per_proc, 1)
+        am_partitions, av_partitions, vtx_indices = split_coo_with_values(adj_matrix, adj_values, node_count, n_per_proc, 1)
 
         proc_node_count = vtx_indices[rank + 1] - vtx_indices[rank]
-        am_pbyp, _ = split_coo(am_partitions[rank], node_count, n_per_proc, 0)
+        am_pbyp, av_pbyp, _ = split_coo_with_values(am_partitions[rank], av_partitions[rank], node_count, n_per_proc, 0)
         for i in range(len(am_pbyp)):
             if i == size - 1:
                 last_node_count = vtx_indices[i + 1] - vtx_indices[i]
-                am_pbyp[i] = torch.sparse_coo_tensor(am_pbyp[i], torch.ones(am_pbyp[i].size(1)), 
-                                                        size=(last_node_count, proc_node_count),
-                                                        requires_grad=False)
+                am_pbyp[i] = torch.sparse_coo_tensor(am_pbyp[i], av_pbyp[i], size=(last_node_count, proc_node_count), requires_grad=False)
+                am_pbyp[i] = am_pbyp[i].coalesce()
+                #print('~~Rank',rank, 'sum',torch.sparse.sum(am_pbyp[i]),'ii',am_pbyp[i][10,10], 'ij', am_pbyp[i][10,20])
 
-                am_pbyp[i] = scale_elements(adj_matrix, am_pbyp[i], node_count, vtx_indices[i], 
-                                                vtx_indices[rank])
+                # am_pbyp[i] = torch.sparse_coo_tensor(am_pbyp[i], torch.ones(am_pbyp[i].size(1)), size=(last_node_count, proc_node_count), requires_grad=False)
+
+                # am_pbyp[i] = scale_elements(adj_matrix, am_pbyp[i], node_count, vtx_indices[i], vtx_indices[rank])
             else:
-                am_pbyp[i] = torch.sparse_coo_tensor(am_pbyp[i], torch.ones(am_pbyp[i].size(1)), 
-                                                        size=(n_per_proc, proc_node_count),
-                                                        requires_grad=False)
-
-                am_pbyp[i] = scale_elements(adj_matrix, am_pbyp[i], node_count, vtx_indices[i], 
-                                                vtx_indices[rank])
+                am_pbyp[i] = torch.sparse_coo_tensor(am_pbyp[i], av_pbyp[i], size=(n_per_proc, proc_node_count), requires_grad=False) 
+                am_pbyp[i] = am_pbyp[i].coalesce()
+                # am_pbyp[i] = torch.sparse_coo_tensor(am_pbyp[i], torch.ones(am_pbyp[i].size(1)), size=(n_per_proc, proc_node_count), requires_grad=False) 
+                # am_pbyp[i] = scale_elements(adj_matrix, am_pbyp[i], node_count, vtx_indices[i], vtx_indices[rank])
+                # if i==0:
+                    # l = 10
+                    # print('~~Rank',rank, am_pbyp[i]._indices()[0][:l], am_pbyp[i]._indices()[1][:l], am_pbyp[i]._values()[:l])
 
         for i in range(len(am_partitions)):
             proc_node_count = vtx_indices[i + 1] - vtx_indices[i]
-            am_partitions[i] = torch.sparse_coo_tensor(am_partitions[i], 
-                                                    torch.ones(am_partitions[i].size(1)), 
-                                                    size=(node_count, proc_node_count), 
-                                                    requires_grad=False)
-            am_partitions[i] = scale_elements(adj_matrix, am_partitions[i], node_count,  0, vtx_indices[i])
+            am_partitions[i] = torch.sparse_coo_tensor(am_partitions[i], av_partitions[i], size=(node_count, proc_node_count), requires_grad=False)
+            am_partitions[i] = am_partitions[i].coalesce()
+            # am_partitions[i] = torch.sparse_coo_tensor(am_partitions[i], torch.ones(am_partitions[i].size(1)), size=(node_count, proc_node_count), requires_grad=False)
+            # am_partitions[i] = scale_elements(adj_matrix, am_partitions[i], node_count,  0, vtx_indices[i])
 
         input_partitions = torch.split(inputs, math.ceil(float(inputs.size(0)) / size), dim=0)
 
@@ -568,7 +618,7 @@ def oned_partition(rank, size, inputs, adj_matrix, data, features, classes, devi
     print(f"rank: {rank} inputs.size: {inputs.size()}", flush=True)
     return inputs_loc, adj_matrix_loc, am_pbyp
 
-def run(rank, size, inputs, adj_matrix, data, features, classes, device):
+def run(rank, size, inputs, adj_matrix, adj_values,data, features, classes, device):
     global epochs
     global mid_layer
     global run
@@ -585,8 +635,10 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
     # inputs_loc = torch.rand(n_per_proc, inputs.size(1))
 
 
-    inputs_loc, adj_matrix_loc, am_pbyp = oned_partition(rank, size, inputs, adj_matrix, data, 
+    print('Rank', rank, 'inputs', torch.sum(inputs))
+    inputs_loc, adj_matrix_loc, am_pbyp = oned_partition(rank, size, inputs, adj_matrix, adj_values, data, 
                                                                 features, classes, device)
+    print('Rank', rank, 'data parted', torch.sum(inputs_loc))
 
     inputs_loc = inputs_loc.to(device)
     adj_matrix_loc = adj_matrix_loc.to(device)
@@ -651,7 +703,12 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
             outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, data, 
                                     rank, size, group)
             if epoch%10==0:
+                #time.sleep(1/(10-rank))
                 print("Epoch: {:03d}".format(epoch), flush=True)
+
+                #ssum = torch.sparse.sum
+                #print('~~Rank',rank,'inputs', torch.sum(inputs_loc).item(), 'am',ssum(adj_matrix_loc).item(), 'pbyp',ssum(am_pbyp[rank]).item(), 
+                        #'w1', torch.sum(weight1).item(), 'w2', torch.sum(weight2).item())
 
         # dist.barrier(group)
         tstop = time.time()
@@ -719,8 +776,8 @@ def run(rank, size, inputs, adj_matrix, data, features, classes, device):
 def rank_to_devid(rank, acc_per_rank):
     return rank % acc_per_rank
 
-def init_process(rank, size, inputs, adj_matrix, data, features, classes, device, outputs, fn):
-    run_outputs = fn(rank, size, inputs, adj_matrix, data, features, classes, device)
+def init_process(rank, size, inputs, adj_matrix, adj_values, data, features, classes, device, outputs, fn):
+    run_outputs = fn(rank, size, inputs, adj_matrix, adj_values, data, features, classes, device)
     if outputs is not None:
         outputs[rank] = run_outputs.detach()
 
@@ -773,30 +830,36 @@ def main():
         num_features = dataset.num_features
         num_classes = dataset.num_classes
     elif graphname == "Reddit":
-        path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', graphname)
-        dataset = Reddit(path, T.NormalizeFeatures())
-        data = dataset[0]
-        data = data.to(device)
-        data.x.requires_grad = True
-        inputs = data.x.to(device)
-        inputs.requires_grad = True
-        data.y = data.y.to(device)
-        edge_index = data.edge_index
-        num_features = dataset.num_features
-        num_classes = dataset.num_classes
-    elif graphname == "SmallerReddit":
-        path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', graphname)
-        dataset = Reddit(path, T.NormalizeFeatures())
+        data = Reddit()
         print('loaded to host mem')
-        data = dataset[0]
-        data = data.to(device)
+        #data = dataset[0]
+        # data = dataset.data
+        # data = data.to(device)
         # data.x.requires_grad = True
         inputs = data.x.to(device)
         # inputs.requires_grad = True
         data.y = data.y.to(device)
         edge_index = data.edge_index
-        num_features = dataset.num_features
-        num_classes = dataset.num_classes
+        num_features = data.x.size(1)
+        num_classes = torch.unique(data.y).size(0)
+    elif graphname == "SmallerReddit":
+        # path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', graphname)
+        data = SmallerReddit()
+        # dataset = Reddit(path, T.NormalizeFeatures())
+        print('loaded to host mem')
+        # data = dataset.data
+        # data = data.to(device)
+        # data.x.requires_grad = True
+        inputs = data.x.to(device)
+        # inputs.requires_grad = True
+        data.y = data.y.to(device)
+        edge_index = data.edge_index
+        num_features = data.x.size(1)
+        num_classes = torch.unique(data.y).size(0)
+        # num_features = dataset.num_features
+        # num_classes = dataset.num_classes
+        num_features = data.x.size(1)
+        num_classes = torch.unique(data.y).size(0)
     elif graphname == 'Amazon':
         # path = osp.join(osp.dirname(osp.realpath(__file__)), '..', 'data', graphname)
         # edge_index = torch.load(path + "/processed/amazon_graph.pt")
@@ -821,39 +884,17 @@ def main():
         # inputs = inputs.to(device)
         inputs.requires_grad = True
         data.y = data.y.to(device)
-    elif graphname == 'subgraph3':
-        # path = "/gpfs/alpine/bif115/scratch/alokt/HipMCL/"
-        # print(f"Loading coo...", flush=True)
-        # edge_index = torch.load(path + "/processed/subgraph3_graph.pt")
-        # print(f"Done loading coo", flush=True)
-        print(f"Loading coo...", flush=True)
-        edge_index = torch.load("../data/subgraph3/processed/data.pt")
-        print(f"Done loading coo", flush=True)
-        n = 8745542
-        num_features = 128
-        # mid_layer = 512
-        # mid_layer = 64
-        num_classes = 256
-        inputs = torch.rand(n, num_features)
-        data = Data()
-        data.y = torch.rand(n).uniform_(0, num_classes - 1).long()
-        data.train_mask = torch.ones(n).long()
-        print(f"edge_index.size: {edge_index.size()}", flush=True)
-        data = data.to(device)
-        inputs.requires_grad = True
-        data.y = data.y.to(device)
 
     print(graphname, 'data loaded')
     if download:
         exit()
 
-    if normalization:
-        adj_matrix, _ = add_remaining_self_loops(edge_index, num_nodes=inputs.size(0))
-    else:
-        adj_matrix = edge_index
+    adj_matrix = edge_index
+    adj_values = data.normalized_adj_values
 
+    # print(graphname, 'data ready')
 
-    init_process(rank, size, inputs, adj_matrix, data, num_features, num_classes, device, outputs, 
+    init_process(rank, size, inputs, adj_matrix, adj_values, data, num_features, num_classes, device, outputs, 
                     run)
 
     if outputs is not None:
