@@ -26,10 +26,10 @@ def dist_log(*args, rank,  group=None):
 
 
 #def dist_bootstrap(rank, dist_main, A_blocks, A_block_seps, H_blocks, labels, num_classe, args):  # called by torch with rank
-def dist_bootstrap(rank, dist_main, A, H, labels, num_classes, args):  # called by torch with rank
+def dist_bootstrap(rank, dist_main, A_index, A_values, H, labels, num_classes, args):  # called by torch with rank
     world_size = args.nprocs
     if args.backend=='nccl':
-        device = torch.device('cuda', rank+4)
+        device = torch.device('cuda', rank)
     else:
         device = torch.device('cpu')
     dist_log(str(device), rank=rank)
@@ -42,21 +42,24 @@ def dist_bootstrap(rank, dist_main, A, H, labels, num_classes, args):  # called 
 
     p2p_group_dict = {}
     world_group = dist.new_group(list(range(world_size)))
+    # dist_log('dist group inited', rank=rank)
     for src in range(world_size):
         for dst in range(src+1, world_size):
             p2p_group_dict[(src, dst)] = dist.new_group([src, dst])
             p2p_group_dict[(dst, src)] = p2p_group_dict[(src, dst)]
-    dist_log('P2P groups inited', rank=rank, group=world_group)
+    dist_log('P2P groups inited', rank=rank)
+    # dist_log('P2P groups inited', rank=rank, group=world_group)
 
-    dist_main(device, rank, world_size, world_group, p2p_group_dict, A, H, labels, num_classes, args)
+    dist_main(device, rank, world_size, world_group, p2p_group_dict, A_index, A_values, H, labels, num_classes, args)
 
 
 def main():
     parser = argparse.ArgumentParser()
+    # parser.add_argument("--local_rank", type=int, default=-1)
     parser.add_argument("--nprocs", type=int, default=8)
     parser.add_argument("--backend", type=str, default="nccl")  # or gloo
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--graphname", type=str, default="Reddit")
+    parser.add_argument("--graphname", type=str, default="SmallerReddit")
     parser.add_argument("--timing", type=bool, default=True)
     parser.add_argument("--mid_layer", type=int, default=16)
     parser.add_argument("--normalization", type=bool, default=True)
@@ -65,12 +68,14 @@ def main():
     args = parser.parse_args()
     print(args)
 
-    A, H, labels, num_classes = dist_data_util.load_data(args) # coo_adj_matrix, features
+    A_index, A_values, H, labels, num_classes = dist_data_util.load_data(args) # coo_adj_matrix, features
     print('data loaded')
     # A_blocks, A_block_seps, H_blocks = dist_data_util.partition_1D(A, H, args.nprocs)
 
     #dist_boot_args=(gcn_distr.dist_main, A_blocks, A_block_seps, H_blocks, labels, num_classes, args)
-    dist_boot_args=(gcn_distr.dist_main, A, H, labels, num_classes, args)
+    dist_boot_args=(gcn_distr.dist_main, A_index, A_values, H, labels, num_classes, args)
+    # dist_boot_args=(gcn_distr.dist_main, 0, 0, 0, 0, 0, args)
+    # dist_bootstrap(args.local_rank, *dist_boot_args)
     torch.multiprocessing.spawn(dist_bootstrap, dist_boot_args, args.nprocs)  # do not killing 1 by 1.
 
 

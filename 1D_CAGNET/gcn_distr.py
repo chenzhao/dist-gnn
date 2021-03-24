@@ -16,18 +16,8 @@ import torch.multiprocessing as mp
 from torch.multiprocessing import Manager, Process
 from torch.nn import Parameter
 
-import torch_sparse
-from torch_scatter import scatter_add
-
-import torch_geometric.transforms as T
-from torch_geometric.data import Data, Dataset
-from torch_geometric.datasets import Planetoid, PPI
-from torch_geometric.nn import GCNConv, ChebConv  # noqa
-from torch_geometric.utils import add_remaining_self_loops, to_dense_adj, dense_to_sparse, to_scipy_sparse_matrix
-
-from reddit import Reddit
+import dist_data_util
 from sparse_coo_tensor_cpp import sparse_coo_tensor_gpu, spmm_gpu
-
 
 
 total_time = defaultdict(float)
@@ -137,26 +127,39 @@ def outer_product2(inputs, ag):
 
 
 def broad_func(node_count, am_partitions, inputs):
+    dist_log('broadcast begin')
     n_per_proc = math.ceil(float(node_count) / g_world_size)
     z_loc = torch.cuda.FloatTensor(am_partitions[0].size(0), inputs.size(1), device=device).fill_(0)
     inputs_recv = torch.cuda.FloatTensor(n_per_proc, inputs.size(1), device=device).fill_(0)
     for i in range(g_world_size):
+        dist_log('loop', i, 'begin')
         if i == g_rank:
-            dist_log('to clone sender data ready', i)
+            dist_log('to clone sender data', inputs.size())
+
+            ii = torch.ones(10, device=device)
+            dist_log('torch OK', ii)
+            time.sleep(1)
+            i2 = inputs.clone()
+            dist_log('clone OK')
+            time.sleep(1)
+
+            inputs_recv = None
+            dist_log('recv clear OK')
             inputs_recv = inputs.clone()
-            dist_log('sender data ready', i)
+            dist_log('sender data ready')
         elif i == g_world_size - 1:
             inputs_recv = torch.cuda.FloatTensor(am_partitions[i].size(1), inputs.size(1), device=device).fill_(0)
+            dist_log('sender data ready')
             # inputs_recv = torch.zeros(list(am_partitions[i].t().size())[1], inputs.size(1))
 
-        barrier_all()
+        dist_log('before barrier', i)
+        # barrier_all()
         dist_log(i,'bcast with sizes:','recv',inputs_recv.size(), 'inputs', inputs.size())
 
         tstart_comm = start_time()
         dist.broadcast(inputs_recv, src=i, group=g_group)
         barrier_all()
         dist_log('bcast done', i)
-        barrier_all()
         dur = stop_time(tstart_comm)
         comm_time[g_rank] += dur
         bcast_comm_time[g_rank] += dur
@@ -176,6 +179,8 @@ def broad_func(node_count, am_partitions, inputs):
         comp_sep_times[g_rank][i] += (tstop-tstart) 
         comp_time[g_rank] += dur 
         scomp_time[g_rank] += dur 
+        dist_log('loop', i, 'end')
+    dist_log('broadcast end')
     return z_loc 
 
 
@@ -273,7 +278,6 @@ def test(outputs, data, vertex_count, rank):
 
 
 #from dist_start import g_rank, g_world_size
-import dist_data_util
 # def dist_main(tg_rank, tg_world_size, A_blocks, A_block_seps, H_blocks, labels, num_classes, args):
 g_rank = -1
 g_group = None
@@ -281,7 +285,7 @@ g_world_size = -1
 device = None
 args = None
 
-def dist_main(ddevice, rank, world_size, world_group, p2p_group_dict, A, H, labels, num_classes, argss):
+def dist_main(ddevice, rank, world_size, world_group, p2p_group_dict, A_index, A_values, H, labels, num_classes, argss):
     global g_rank, g_world_size, g_group, device, args
     g_rank = rank
     g_world_size = world_size
@@ -289,10 +293,10 @@ def dist_main(ddevice, rank, world_size, world_group, p2p_group_dict, A, H, labe
     g_group = world_group
     args = argss
 
-    dist_log('in distmain', group=g_group)
+    # dist_log('in distmain', group=g_group)
 
-    Ai, Ai_blocks, Hi = dist_data_util.partition_1D(A, H, args.nprocs, rank=g_rank)
-    # print(Ai.size(), Hi.size())
+    Ai, Ai_blocks, Hi = dist_data_util.partition_1D(A_index, A_values, H, args.nprocs, rank=g_rank)
+    dist_log('data parted', Ai.size(), Hi.size())
     # return
     best_val_acc = test_acc = 0
     outputs = None
