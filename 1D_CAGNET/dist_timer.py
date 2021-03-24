@@ -1,15 +1,14 @@
 import time
 import statistics
 from collections import defaultdict
+from utils import DistUtil
 
 
-class DistTimer():
-    def __init__(self, rank,world_group):
-        self.rank = rank
-        self.world_group=world_group
+class DistTimer(DistUtil):
+    def __init__(self, env):
         self.start_time_dict = defaultdict(float)
         self.duration_dict = defaultdict(float)
-        pass
+        super(self).__init__(env)
 
     def summary(self):
         dist.barrier(g_world_group)

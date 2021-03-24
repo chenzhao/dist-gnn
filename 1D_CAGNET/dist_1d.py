@@ -10,7 +10,6 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 
 from sparse_coo_tensor_cpp import sparse_coo_tensor_gpu, spmm_gpu
-from fast_reddit import Reddit, SmallerReddit
 
 from dist_timer import DistTimer
 import utils 
@@ -23,7 +22,7 @@ def outer_product2(inputs, ag):
     g_timer.stop_time('mm', 'comp')
     
     g_timer.start_time('all reduce')
-    dist.all_reduce(grad_weight, op=dist.ReduceOp.SUM, group=g_world_group)
+    dist.all_reduce(grad_weight, op=dist.ReduceOp.SUM, group=g_env.world_group)
     g_timer.stop_time('all reduce', 'comm')
     return grad_weight
 
@@ -70,6 +69,7 @@ def p2p_broad_func(node_count, am_partitions, inputs):
     return z_loc
 
 def broad_func(node_count, am_partitions, inputs):
+    device = g_env.device
     n_per_proc = math.ceil(float(node_count) / g_world_size)
     z_loc = torch.zeros((am_partitions[0].size(0), inputs.size(1)), device=device)
     inputs_recv = torch.zeros((n_per_proc, inputs.size(1)), device=device)
@@ -81,7 +81,7 @@ def broad_func(node_count, am_partitions, inputs):
             inputs_recv = torch.zeros((am_partitions[i].size(1), inputs.size(1)), device=device)
         barrier_all()
         g_timer.start_time('broadcast')
-        dist.broadcast(inputs_recv, src=i, group=g_world_group)
+        dist.broadcast(inputs_recv, src=i, group=g_env.world_group)
         g_timer.stop_time('comm')
 
         g_timer.start_time('spmm')
@@ -134,8 +134,8 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, data):
     outputs = GCNFunc.apply(outputs, weight2, adj_matrix, am_partitions, lambda x:F.log_softmax(x, dim=1))
 
     optimizer.zero_grad()
-    rank_train_mask = torch.split(data.train_mask.bool(), outputs.size(0), dim=0)[g_rank]
-    datay_rank = torch.split(data.y, outputs.size(0), dim=0)[g_rank]
+    rank_train_mask = torch.split(data.train_mask.bool(), outputs.size(0), dim=0)[g_env.rank]
+    datay_rank = torch.split(data.y, outputs.size(0), dim=0)[g_env.rank]
 
     if list(datay_rank[rank_train_mask].size())[0] > 0:
         loss = F.nll_loss(outputs[rank_train_mask], datay_rank[rank_train_mask])
@@ -155,22 +155,17 @@ def test(outputs, data, vertex_count, rank):
         accs.append(acc)
     return accs
 
-def main(inputs, adj_matrix, adj_values, data, features, classes):
+def main():
     global run
-
-    inputs_loc, adj_matrix_loc, am_pbyp = g_data.oned_partition(inputs, adj_matrix, adj_values, data, features, classes)
-    inputs_loc = inputs_loc.to(device)  # to device
-    adj_matrix_loc = adj_matrix_loc.to(device)
-    for i in range(len(am_pbyp)):
-        am_pbyp[i] = am_pbyp[i].t().coalesce().to(device)
+    inputs_loc, adj_matrix_loc, am_pbyp = g_data.local_features, g_data.local_adj, g_data.local_adj_parts 
 
     for i in range(args.run_count):
         run = i
         torch.manual_seed(0)
-        weight1_nonleaf = torch.rand(features, args.mid_layer, requires_grad=True, device=device)
+        weight1_nonleaf = torch.rand(features, args.mid_layer, requires_grad=True, device=g_env.device)
         weight1_nonleaf.retain_grad()
 
-        weight2_nonleaf = torch.rand(args.mid_layer, classes, requires_grad=True, device=device)
+        weight2_nonleaf = torch.rand(args.mid_layer, classes, requires_grad=True, device=g_env.device)
         weight2_nonleaf.retain_grad()
 
         weight1 = Parameter(weight1_nonleaf)
@@ -180,21 +175,21 @@ def main(inputs, adj_matrix, adj_values, data, features, classes):
         # dist.barrier(g_world_group)
 
         print(f"Starting training... rank {g_rank} run {i}", flush=True)
-        outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, data)
+        outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer)
         # dist.barrier(g_world_group)
         g_timer.start_time('train')
         for epoch in range(1, args.epochs):
-            outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, data)
+            outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer)
             if epoch%10==0:
                 print("Epoch: {:03d}".format(epoch), flush=True)
         g_timer.stop_time('train')
 
     n_per_proc = math.ceil(float(inputs.size(0)) / g_world_size)
-    output_parts = [torch.zeros(n_per_proc, classes, device=device) for i in range(g_world_size)]
+    output_parts = [torch.zeros(n_per_proc, classes, device=g_env.device) for i in range(g_env.world_size)]
 
     if outputs.size(0) != n_per_proc:
         pad_row = n_per_proc - outputs.size(0) 
-        outputs = torch.cat((outputs, torch.cuda.FloatTensor(pad_row, classes, device=device)), dim=0)
+        outputs = torch.cat((outputs, torch.cuda.FloatTensor(pad_row, classes, device=g_env.device)), dim=0)
 
     dist.all_gather(output_parts, outputs)
     output_parts[g_rank] = outputs
@@ -206,25 +201,6 @@ def main(inputs, adj_matrix, adj_values, data, features, classes):
     train_acc, val_acc, test_acc = test(outputs, data, am_pbyp[0].size(1), g_rank)
     print( 'Epoch: {:03d}, Train: {:.4f}, Val: {:.4f}, Test: {:.4f}'.format(args.epochs, train_acc, val_acc, test_acc))
     return outputs
-
-def rank_to_devid(g_rank):
-    return g_rank
-
-def prepare_and_run():
-    if args.graphname == "Reddit":
-        data = Reddit()
-    elif args.graphname == "SmallerReddit":
-        data = SmallerReddit()
-    print('loaded to host mem')
-    #inputs = data.x.to(device)
-    #data.y = data.y.to(device)
-    inputs = data.x
-    adj_matrix = data.edge_index
-    adj_values = data.normalized_adj_values
-    num_features = data.x.size(1)
-    num_classes = torch.unique(data.y).size(0)
-    print(args.graphname, 'data loaded')
-    main(inputs, adj_matrix, adj_values, data, num_features, num_classes)
 
 
 if __name__ == '__main__':
@@ -239,19 +215,13 @@ if __name__ == '__main__':
     args = parser.parse_args()
     print(args)
     g_env = utils.DistEnv(args.local_rank, args.world_size)
-    device = torch.device('cuda:{}'.format(rank_to_devid(g_rank)))
-    torch.cuda.set_device(device)
 
-    dist.init_process_group(backend='nccl')
-    g_world_group = dist.new_group(list(range(g_world_size)))
-    g_timer=DistTimer(g_env)
-    g_data=utils.DistData(g_env)
-    p2p_group_dict = {}
-    for src in range(g_world_size):
-        for dst in range(src+1, g_world_size):
-            p2p_group_dict[(src, dst)] = dist.new_group([src, dst])
-            p2p_group_dict[(dst, src)] = p2p_group_dict[(src, dst)]
-    print('P2P groups inited')
-    utils.dist_log('test', 'P2P ready')
-    prepare_and_run()
+    g_timer = DistTimer(g_env)
+    g_logger = utils.DistLogger(g_env)
+    g_logger.log( 'dist env inited')
+
+    g_data = utils.DistData(g_env, args.graphname)
+    g_logger.log( 'dist data inited')
+
+    main()
 
