@@ -27,7 +27,7 @@ class DistEnv():
             for dst in range(src+1, self.world_size):
                 self.p2p_group_dict[(src, dst)] = dist.new_group([src, dst])
                 self.p2p_group_dict[(dst, src)] = self.p2p_group_dict[(src, dst)]
-        print('dist groups inited')
+        # print('dist groups inited')
 
 
 class DistUtil():
@@ -41,8 +41,8 @@ class DistUtil():
 
 class DistLogger(DistUtil):
     def log(self, *args):
-        head = '%s [Rank %2d] '%(dt.datetime.now(), self.rank)
-        print(head, *args, flush=True)
+        head = '%s [%1d] '%(dt.datetime.now().time(), self.rank)
+        print(head+' '.join(map(str, args))+'\n', end='', flush=True)  # to prevent line breaking
         with open('all_log_%d.txt'%self.rank, 'a+') as f:
             print(head, *args, file=f, flush=True)
 
@@ -70,7 +70,7 @@ class DistData(DistUtil):
             data = SmallerReddit()
         else:
             assert False
-        print('data loaded to host mem')
+        # print('data loaded to host mem')
         self.features = data.x
         self.labels = data.y.to(self.device)
         self.adj_indices = data.edge_index
@@ -78,10 +78,8 @@ class DistData(DistUtil):
         self.num_features = data.x.size(1)
         self.num_classes = torch.unique(data.y).size(0)
         self.train_mask, self.val_mask, self.test_mask = data.train_mask, data.val_mask, data.test_mask
-
         self.partition_1d()
-
-        print('Rank',self.rank,'data ready')
+        # print('Rank',self.rank,'data ready')
 
     def partition_1d(self):
         self.local_features, self.local_adj, self.local_adj_parts = \
@@ -125,7 +123,7 @@ class DistData(DistUtil):
                 proc_node_count = vtx_indices[i + 1] - vtx_indices[i]
                 am_partitions[i] = torch.sparse_coo_tensor(am_partitions[i], av_partitions[i], size=(node_count, proc_node_count), requires_grad=False).coalesce()
             input_partitions = torch.split(inputs, math.ceil(inputs.size(0)/world_size), dim=0)
-        print('Rank',rank,'parted')
+        # print('Rank',rank,'parted')
         return  input_partitions[rank], am_partitions[rank], am_pbyp
 
 

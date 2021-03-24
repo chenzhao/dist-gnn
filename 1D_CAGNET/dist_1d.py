@@ -200,7 +200,7 @@ def main():
     outputs = torch.cat(output_parts, dim=0)
 
     train_acc, val_acc, test_acc = test(outputs, am_pbyp[0].size(1))
-    print( 'Epoch: {:03d}, Train: {:.4f}, Val: {:.4f}, Test: {:.4f}'.format(args.epochs, train_acc, val_acc, test_acc))
+    g_logger.log( 'Epoch: {:03d}, Train: {:.4f}, Val: {:.4f}, Test: {:.4f}'.format(args.epochs, train_acc, val_acc, test_acc))
     return outputs
 
 
