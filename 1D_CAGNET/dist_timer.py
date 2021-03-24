@@ -4,11 +4,12 @@ from collections import defaultdict
 from utils import DistUtil
 
 
+
 class DistTimer(DistUtil):
     def __init__(self, env):
+        super().__init__(env)
         self.start_time_dict = defaultdict(float)
         self.duration_dict = defaultdict(float)
-        super(self).__init__(env)
 
     def summary(self):
         dist.barrier(g_world_group)
@@ -38,14 +39,11 @@ class DistTimer(DistUtil):
             print(f"rank: {g_rank} op1_comm_time: {op1_comm_time[median_idx][g_rank]}", file=f)
             print(f"rank: {g_rank} op2_comm_time: {op2_comm_time[median_idx][g_rank]}", file=f)
             print(f"rank: {g_rank} {outputs}", file=f)
-    def barrier_all(self, subset=False):
-        barrier_tstart = time.time()
-        dist.barrier(self.world_group)
-        barrier_tstop = time.time()
-        barrier_time[run][self.rank] += barrier_tstop - barrier_tstart
-        if subset:
-            barrier_subset_time[run][self.rank] += barrier_tstop - barrier_tstart
 
+    def barrier_all(self, subset=False):
+        self.start_time('barrier')
+        self.env.barrier_all()
+        self.stop_time('barrier')
 
     def start_time(self, key):
         self.start_time_dict[key] = time.time()

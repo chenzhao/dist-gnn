@@ -44,7 +44,7 @@ def p2p_broad_func(node_count, am_partitions, inputs):
         elif i == g_world_size - 1:
             inputs_recv = torch.cuda.FloatTensor(am_partitions[i].size(1), inputs.size(1), device=device).fill_(0)
             # inputs_recv = torch.zeros(list(am_partitions[i].t().size())[1], inputs.size(1))
-        barrier_all()
+        g_timer.barrier_all()
 
         tstart_comm = start_time()
 
@@ -54,7 +54,7 @@ def p2p_broad_func(node_count, am_partitions, inputs):
         comm_time[run][g_rank] += dur
         bcast_comm_time[run][g_rank] += dur
 
-        barrier_all()
+        g_timer.barrier_all()
 
         tstart_comp = start_time()
 
@@ -63,32 +63,32 @@ def p2p_broad_func(node_count, am_partitions, inputs):
                         am_partitions[i].size(1), inputs_recv, z_loc)
 
         dur = stop_time( tstart_comp)
-        comp_time[run][g_rank] += dur
-        scomp_time[run][g_rank] += dur
+        comp_time[run][g_data.rank] += dur
+        scomp_time[run][g_data.rank] += dur
 
     return z_loc
 
 def broad_func(node_count, am_partitions, inputs):
-    device = g_env.device
-    n_per_proc = math.ceil(float(node_count) / g_world_size)
+    device = g_data.device
+    n_per_proc = math.ceil(float(node_count) / g_data.world_size)
     z_loc = torch.zeros((am_partitions[0].size(0), inputs.size(1)), device=device)
     inputs_recv = torch.zeros((n_per_proc, inputs.size(1)), device=device)
 
-    for i in range(g_world_size):
-        if i == g_rank:
+    for i in range(g_data.world_size):
+        if i == g_data.rank:
             inputs_recv = inputs.clone()
-        elif i == g_world_size - 1:
+        elif i == g_data.world_size - 1:
             inputs_recv = torch.zeros((am_partitions[i].size(1), inputs.size(1)), device=device)
-        barrier_all()
+        g_timer.barrier_all()
         g_timer.start_time('broadcast')
         dist.broadcast(inputs_recv, src=i, group=g_env.world_group)
-        g_timer.stop_time('comm')
+        g_timer.stop_time('broadcast','comm')
 
         g_timer.start_time('spmm')
         spmm_gpu(am_partitions[i].indices()[0].int(), am_partitions[i].indices()[1].int(), 
                         am_partitions[i].values(), am_partitions[i].size(0), 
                         am_partitions[i].size(1), inputs_recv, z_loc)
-        g_timer.start_time('spmm', 'comp')
+        g_timer.stop_time('spmm', 'comp')
     return z_loc
 
 class GCNFunc(torch.autograd.Function):
@@ -102,7 +102,7 @@ class GCNFunc(torch.autograd.Function):
 
         g_timer.start_time('mm')
         z = torch.mm(z, weight)
-        g_timer.start_time('mm', 'comp')
+        g_timer.stop_time('mm', 'comp')
 
         z.requires_grad = True
         ctx.z = z
@@ -123,19 +123,19 @@ class GCNFunc(torch.autograd.Function):
 
         g_timer.start_time('mm')
         grad_input = torch.mm(ag, weight.t())
-        g_timer.stop('mm', 'comp')
+        g_timer.stop_time('mm', 'comp')
         # Second backprop equation (reuses the A * G^l computation)
         grad_weight = outer_product2(inputs.t(), ag)
 
         return grad_input, grad_weight, None, None, None, None, None, None
 
-def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, data):
+def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer):
     outputs = GCNFunc.apply(inputs, weight1, adj_matrix, am_partitions, F.relu)
     outputs = GCNFunc.apply(outputs, weight2, adj_matrix, am_partitions, lambda x:F.log_softmax(x, dim=1))
 
     optimizer.zero_grad()
-    rank_train_mask = torch.split(data.train_mask.bool(), outputs.size(0), dim=0)[g_env.rank]
-    datay_rank = torch.split(data.y, outputs.size(0), dim=0)[g_env.rank]
+    rank_train_mask = torch.split(g_data.train_mask.bool(), outputs.size(0), dim=0)[g_env.rank]
+    datay_rank = torch.split(g_data.labels, outputs.size(0), dim=0)[g_env.rank]
 
     if list(datay_rank[rank_train_mask].size())[0] > 0:
         loss = F.nll_loss(outputs[rank_train_mask], datay_rank[rank_train_mask])
@@ -147,25 +147,26 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, data):
     optimizer.step()
     return outputs
 
-def test(outputs, data, vertex_count, rank):
+def test(outputs, vertex_count):
     logits, accs = outputs, []
-    for mask in [data.train_mask, data.val_mask, data.test_mask]:
+    for mask in [g_data.train_mask, g_data.val_mask, g_data.test_mask]:
         pred = logits[mask].max(1)[1]
-        acc = pred.eq(data.y[mask]).sum().item() / mask.sum().item()
+        acc = pred.eq(g_data.labels[mask]).sum().item() / mask.sum().item()
         accs.append(acc)
     return accs
 
 def main():
     global run
     inputs_loc, adj_matrix_loc, am_pbyp = g_data.local_features, g_data.local_adj, g_data.local_adj_parts 
+    device = g_data.device
 
     for i in range(args.run_count):
         run = i
         torch.manual_seed(0)
-        weight1_nonleaf = torch.rand(features, args.mid_layer, requires_grad=True, device=g_env.device)
+        weight1_nonleaf = torch.rand(g_data.num_features, args.mid_layer, requires_grad=True, device=device)
         weight1_nonleaf.retain_grad()
 
-        weight2_nonleaf = torch.rand(args.mid_layer, classes, requires_grad=True, device=g_env.device)
+        weight2_nonleaf = torch.rand(args.mid_layer, g_data.num_classes, requires_grad=True, device=device)
         weight2_nonleaf.retain_grad()
 
         weight1 = Parameter(weight1_nonleaf)
@@ -174,31 +175,31 @@ def main():
         optimizer = torch.optim.Adam([weight1, weight2], lr=0.01)
         # dist.barrier(g_world_group)
 
-        print(f"Starting training... rank {g_rank} run {i}", flush=True)
+        g_logger.log(f"Starting training... run {i}")
         outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer)
         # dist.barrier(g_world_group)
         g_timer.start_time('train')
         for epoch in range(1, args.epochs):
             outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer)
             if epoch%10==0:
-                print("Epoch: {:03d}".format(epoch), flush=True)
+                g_logger.log("Epoch: {:03d}".format(epoch))
         g_timer.stop_time('train')
 
-    n_per_proc = math.ceil(float(inputs.size(0)) / g_world_size)
-    output_parts = [torch.zeros(n_per_proc, classes, device=g_env.device) for i in range(g_env.world_size)]
+    n_per_proc = math.ceil(g_data.features.size(0) / g_env.world_size)
+    output_parts = [torch.zeros(n_per_proc, g_data.num_classes, device=g_data.device) for i in range(g_env.world_size)]
 
     if outputs.size(0) != n_per_proc:
         pad_row = n_per_proc - outputs.size(0) 
-        outputs = torch.cat((outputs, torch.cuda.FloatTensor(pad_row, classes, device=g_env.device)), dim=0)
+        outputs = torch.cat((outputs, torch.cuda.FloatTensor(pad_row, g_data.num_classes, device=g_data.device)), dim=0)
 
     dist.all_gather(output_parts, outputs)
-    output_parts[g_rank] = outputs
+    output_parts[g_data.rank] = outputs
     
-    padding = inputs.size(0) - n_per_proc * (g_world_size - 1)
-    output_parts[g_world_size - 1] = output_parts[g_world_size - 1][:padding,:]
+    padding = g_data.features.size(0) - n_per_proc * (g_data.world_size - 1)
+    output_parts[g_data.world_size - 1] = output_parts[g_data.world_size - 1][:padding,:]
     outputs = torch.cat(output_parts, dim=0)
 
-    train_acc, val_acc, test_acc = test(outputs, data, am_pbyp[0].size(1), g_rank)
+    train_acc, val_acc, test_acc = test(outputs, am_pbyp[0].size(1))
     print( 'Epoch: {:03d}, Train: {:.4f}, Val: {:.4f}, Test: {:.4f}'.format(args.epochs, train_acc, val_acc, test_acc))
     return outputs
 
