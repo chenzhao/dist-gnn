@@ -158,7 +158,7 @@ def test(outputs, data, vertex_count, rank):
 def main(inputs, adj_matrix, adj_values, data, features, classes):
     global run
 
-    inputs_loc, adj_matrix_loc, am_pbyp = utils.oned_partition(inputs, adj_matrix, adj_values, data, features, classes)
+    inputs_loc, adj_matrix_loc, am_pbyp = g_data.oned_partition(inputs, adj_matrix, adj_values, data, features, classes)
     inputs_loc = inputs_loc.to(device)  # to device
     adj_matrix_loc = adj_matrix_loc.to(device)
     for i in range(len(am_pbyp)):
@@ -238,19 +238,20 @@ if __name__ == '__main__':
     parser.add_argument("--mid_layer", type=int, default=16)
     args = parser.parse_args()
     print(args)
-    g_rank, g_world_size = args.local_rank, args.world_size
+    g_env = utils.DistEnv(args.local_rank, args.world_size)
     device = torch.device('cuda:{}'.format(rank_to_devid(g_rank)))
     torch.cuda.set_device(device)
 
     dist.init_process_group(backend='nccl')
     g_world_group = dist.new_group(list(range(g_world_size)))
-    g_timer=DistTimer(g_rank,g_world_group)
+    g_timer=DistTimer(g_env)
+    g_data=utils.DistData(g_env)
     p2p_group_dict = {}
     for src in range(g_world_size):
         for dst in range(src+1, g_world_size):
             p2p_group_dict[(src, dst)] = dist.new_group([src, dst])
             p2p_group_dict[(dst, src)] = p2p_group_dict[(src, dst)]
     print('P2P groups inited')
-    utils.dist_log('test', p2p_begin)
+    utils.dist_log('test', 'P2P ready')
     prepare_and_run()
 

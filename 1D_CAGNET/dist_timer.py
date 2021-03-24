@@ -1,11 +1,10 @@
 import time
 import statistics
-from dist_1d import g_rank, g_world_group
 from collections import defaultdict
 
 
 class DistTimer():
-    def __init__(rank,world_group):
+    def __init__(self, rank,world_group):
         self.rank = rank
         self.world_group=world_group
         self.start_time_dict = defaultdict(float)
@@ -55,7 +54,6 @@ class DistTimer():
 
     def stop_time(self, key, other_keys=None):
         assert ( key in self.start_time_dict )
-        #barrier_all(g_world_group, g_rank)
         tstop = time.time()
         dur = tstop - self.start_time_dict[key]
         self.duration_dict[key] += dur
