@@ -205,6 +205,7 @@ def main():
 
 
 if __name__ == '__main__':
+    # os.environ['OMP_NUM_THREADS'] = '1' # to avoid warning
     parser = argparse.ArgumentParser()
     parser.add_argument("--local_rank", type=int)
     parser.add_argument("--world_size", type=int, default=8)
