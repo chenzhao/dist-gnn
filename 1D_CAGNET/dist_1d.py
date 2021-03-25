@@ -54,9 +54,9 @@ def p2p_by_bcast(src, dst, to_send):
 
 
 def p2p_broadcast(t, src):
-    mm_nz_rows = []  # matrix multiplication non zero
     for dst in range(g_data.world_size):
-        needed_rows_idx = mm_nz_rows[dst]
+        dst_adj_nz_col = g_data.nz_col_dict[(dst, src)]  #  non zero
+        needed_rows_idx = dst_adj_nz_col
         if g_data.rank not in (src, dst):
             g_logger.log('p2p bcast skip', src, dst)
             return
