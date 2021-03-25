@@ -5,7 +5,8 @@ import torch.distributed as dist
 from fast_reddit import Reddit, SmallerReddit
 import math
 
-class DistEnv():
+
+class DistEnv:
     def __init__(self, local_rank, world_size):
         assert(local_rank>=0)
         assert(world_size>0)
@@ -31,7 +32,7 @@ class DistEnv():
         # print('dist groups inited')
 
 
-class DistUtil():
+class DistUtil:
     def __init__(self, env):
         self.env = env
         self.rank = env.rank
@@ -125,7 +126,7 @@ class DistData(DistUtil):
                 am_partitions[i] = torch.sparse_coo_tensor(am_partitions[i], av_partitions[i], size=(node_count, proc_node_count), requires_grad=False).coalesce()
             input_partitions = torch.split(inputs, math.ceil(inputs.size(0)/world_size), dim=0)
         # print('Rank',rank,'parted')
-        return  input_partitions[rank], am_partitions[rank], am_pbyp
+        return input_partitions[rank], am_partitions[rank], am_pbyp
 
 
 

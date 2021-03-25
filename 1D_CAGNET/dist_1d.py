@@ -1,10 +1,8 @@
 import math
 import argparse
-import datetime as dt
 
 import torch
 import torch.distributed as dist
-import torch.multiprocessing as mp
 
 from torch.nn import Parameter
 import torch.nn.functional as F
@@ -26,49 +24,8 @@ def outer_product2(inputs, ag):
     g_timer.stop_time('all reduce', 'comm')
     return grad_weight
 
-p2p_group_dict = None
+
 def p2p_broad_func(node_count, am_partitions, inputs):
-    # n_per_proc = math.ceil(float(adj_matrix.size(1)) / size)
-    n_per_proc = math.ceil(float(node_count) / g_world_size)
-
-    # z_loc = torch.cuda.FloatTensor(adj_matrix.size(0), inputs.size(1), device=device).fill_(0)
-    z_loc = torch.cuda.FloatTensor(am_partitions[0].size(0), inputs.size(1), device=device).fill_(0)
-    # z_loc = torch.zeros(adj_matrix.size(0), inputs.size(1))
-    
-    inputs_recv = torch.cuda.FloatTensor(n_per_proc, inputs.size(1), device=device).fill_(0)
-    # inputs_recv = torch.zeros(n_per_proc, inputs.size(1))
-
-    for i in range(g_world_size):
-        if i == g_rank:
-            inputs_recv = inputs.clone()
-        elif i == g_world_size - 1:
-            inputs_recv = torch.cuda.FloatTensor(am_partitions[i].size(1), inputs.size(1), device=device).fill_(0)
-            # inputs_recv = torch.zeros(list(am_partitions[i].t().size())[1], inputs.size(1))
-        g_timer.barrier_all()
-
-        tstart_comm = start_time()
-
-        dist.broadcast(inputs_recv, src=i, group=g_world_group)
-
-        dur = stop_time( tstart_comm)
-        comm_time[run][g_rank] += dur
-        bcast_comm_time[run][g_rank] += dur
-
-        g_timer.barrier_all()
-
-        tstart_comp = start_time()
-
-        spmm_gpu(am_partitions[i].indices()[0].int(), am_partitions[i].indices()[1].int(), 
-                        am_partitions[i].values(), am_partitions[i].size(0), 
-                        am_partitions[i].size(1), inputs_recv, z_loc)
-
-        dur = stop_time( tstart_comp)
-        comp_time[run][g_data.rank] += dur
-        scomp_time[run][g_data.rank] += dur
-
-    return z_loc
-
-def broad_func(node_count, am_partitions, inputs):
     device = g_data.device
     n_per_proc = math.ceil(float(node_count) / g_data.world_size)
     z_loc = torch.zeros((am_partitions[0].size(0), inputs.size(1)), device=device)
@@ -85,11 +42,60 @@ def broad_func(node_count, am_partitions, inputs):
         g_timer.stop_time('broadcast','comm')
 
         g_timer.start_time('spmm')
+        spmm_gpu(am_partitions[i].indices()[0].int(), am_partitions[i].indices()[1].int(),
+                 am_partitions[i].values(), am_partitions[i].size(0),
+                 am_partitions[i].size(1), inputs_recv, z_loc)
+        g_timer.stop_time('spmm', 'comp')
+    return z_loc
+
+
+def p2p_by_bcast(src, dst, to_send):
+    pass
+
+
+def p2p_broadcast(t, src):
+    mm_nz_rows = []  # matrix multiplication non zero
+    for dst in range(g_data.world_size):
+        needed_rows_idx = mm_nz_rows[dst]
+        if g_data.rank not in (src, dst):
+            g_logger.log('p2p bcast skip', src, dst)
+            return
+        if g_data.rank==src:
+            p2p_buf = t[needed_rows_idx]
+        elif g_data.rank == dst:
+            p2p_buf = torch.zeros((needed_rows_idx.size(0), t.size(1)), device=g_data.device)
+        dist.broadcast(p2p_buf, src, group=g_env.p2p_group_dict[(src, dst)])
+        g_logger.log('p2p bcast done', src, dst)
+        if g_data.rank == dst:
+            t[needed_rows_idx] = p2p_buf
+            g_logger.log('p2p dst done', src, dst)
+            return
+
+
+def broad_func(node_count, am_partitions, inputs):
+    device = g_data.device
+    n_per_proc = math.ceil(float(node_count) / g_data.world_size)
+    z_loc = torch.zeros((am_partitions[0].size(0), inputs.size(1)), device=device)
+    inputs_recv = torch.zeros((n_per_proc, inputs.size(1)), device=device)
+
+    for i in range(g_data.world_size):
+        if i == g_data.rank:
+            inputs_recv = inputs.clone()
+        elif i == g_data.world_size - 1:
+            inputs_recv = torch.zeros((am_partitions[i].size(1), inputs.size(1)), device=device)
+        g_timer.barrier_all()
+        g_timer.start_time('broadcast')
+        # dist.broadcast(inputs_recv, src=i, group=g_env.world_group)
+        p2p_broadcast(inputs_recv, i)
+        g_timer.stop_time('broadcast','comm')
+
+        g_timer.start_time('spmm')
         spmm_gpu(am_partitions[i].indices()[0].int(), am_partitions[i].indices()[1].int(), 
                         am_partitions[i].values(), am_partitions[i].size(0), 
                         am_partitions[i].size(1), inputs_recv, z_loc)
         g_timer.stop_time('spmm', 'comp')
     return z_loc
+
 
 class GCNFunc(torch.autograd.Function):
     @staticmethod
@@ -97,9 +103,8 @@ class GCNFunc(torch.autograd.Function):
         ctx.save_for_backward(inputs, weight, adj_matrix)
         ctx.am_partitions = am_partitions
         ctx.activation_func = activation_func
-
         z = broad_func(adj_matrix.size(0), am_partitions, inputs)
-
+        # z = p2p_broad_func(adj_matrix.size(0), am_partitions, inputs)
         g_timer.start_time('mm')
         z = torch.mm(z, weight)
         g_timer.stop_time('mm', 'comp')
@@ -129,6 +134,7 @@ class GCNFunc(torch.autograd.Function):
 
         return grad_input, grad_weight, None, None, None, None, None, None
 
+
 def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer):
     outputs = GCNFunc.apply(inputs, weight1, adj_matrix, am_partitions, F.relu)
     outputs = GCNFunc.apply(outputs, weight2, adj_matrix, am_partitions, lambda x:F.log_softmax(x, dim=1))
@@ -147,6 +153,7 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer):
     optimizer.step()
     return outputs
 
+
 def test(outputs, vertex_count):
     logits, accs = outputs, []
     for mask in [g_data.train_mask, g_data.val_mask, g_data.test_mask]:
@@ -154,6 +161,7 @@ def test(outputs, vertex_count):
         acc = pred.eq(g_data.labels[mask]).sum().item() / mask.sum().item()
         accs.append(acc)
     return accs
+
 
 def main():
     global run

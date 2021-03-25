@@ -130,4 +130,5 @@ dmypy.json
 data/
 *.txt
 *.swp
+.idea
 
