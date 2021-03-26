@@ -8,28 +8,34 @@ from collections import defaultdict
 
 
 from utils import DistUtil
-from fast_reddit import Reddit, SmallerReddit
+from coo_graph import COO_SmallerReddit, COO_Reddit
 
 
 class DistData(DistUtil):
     def __init__(self, env, graph_name):
         super().__init__(env)
         if graph_name == "Reddit":
-            data = Reddit()
+            self.g = COO_Reddit()
         elif graph_name == "SmallerReddit":
-            data = SmallerReddit()
+            self.g = COO_SmallerReddit()
         else:
             assert False
         # print('data loaded to host mem')
-        self.features = data.x
-        self.labels = data.y.to(self.device)
-        self.adj_indices = data.edge_index
-        self.adj_values = data.normalized_adj_values
-        self.num_features = data.x.size(1)
-        self.num_classes = torch.unique(data.y).size(0)
-        self.train_mask, self.val_mask, self.test_mask = data.train_mask, data.val_mask, data.test_mask
-        self.partition_1d()
+        if os.path.exists(self.parted_data_file()):
+            self.load_local_part()
+        else:
+            self.partition_1d()
+            self.save_local_part()
         # print('Rank',self.rank,'data ready')
+
+    def load_local_part(self):
+        pass
+
+    def save_local_part(self):
+        pass
+
+    def parted_data_file(self):
+        return os.path.join('..', 'coo_graph_data', self.graph_name, 'parted', 'part%d.pt'%self.rank)
 
     def partition_1d(self):
         self.local_features, self.local_adj, self.local_adj_parts, self.nz_col_dict = \

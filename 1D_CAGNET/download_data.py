@@ -82,7 +82,6 @@ class SmallerReddit(InMemoryDataset):
         torch.save({"x":smaller_x, "y":smaller_y, "edge_index":smaller_edge_index, "split":smaller_split}, self.processed_paths[0])
 
 
-
 def main():
     data_root = os.path.join('..', 'torch_ready_data', 'Reddit')
     Reddit(data_root)
