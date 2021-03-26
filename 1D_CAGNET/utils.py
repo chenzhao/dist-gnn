@@ -120,10 +120,10 @@ class DistData(DistUtil):
                 am_pbyp[i] = torch.sparse_coo_tensor(am_pbyp[i], av_pbyp[i], size=(sizes[i], sizes[rank]), requires_grad=False).coalesce()
                 # find nz cols for p2p bcast
                 for j in range(len(am_pbyp)):
-                    if i<j:
-                        i_mask = ((adj_indices[0,:]>=sep[i])&(adj_indices[0,:]<sep[i+1])).nonzero().squeeze(1)
-                        j_mask = ((adj_indices[1,:]>=sep[j])&(adj_indices[1,:]<sep[j+1])).nonzero().squeeze(1)
-                        col_ij = adj_indices[1, i_mask & j_mask] - sep[j]
+                    if i!=j:
+                        i_mask = ((adj_indices[0,:]>=sep[i])&(adj_indices[0,:]<sep[i+1]))
+                        j_mask = ((adj_indices[1,:]>=sep[j])&(adj_indices[1,:]<sep[j+1]))
+                        col_ij = adj_indices[1, (i_mask & j_mask).nonzero().squeeze(1)] - sep[j]
                         nz_col_dict[(i,j)] = torch.unique(col_ij)
                         if rank==0:
                             print('nz col',i,j, nz_col_dict[(i,j)].size() )

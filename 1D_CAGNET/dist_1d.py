@@ -55,20 +55,21 @@ def p2p_by_bcast(src, dst, to_send):
 
 def p2p_broadcast(t, src):
     for dst in range(g_data.world_size):
+        if src==dst or g_data.rank not in (src, dst):
+            # g_logger.log('p2p bcast skip', src, dst)
+            continue
         dst_adj_nz_col = g_data.nz_col_dict[(dst, src)]  #  non zero
         needed_rows_idx = dst_adj_nz_col
-        if g_data.rank not in (src, dst):
-            g_logger.log('p2p bcast skip', src, dst)
-            return
         if g_data.rank==src:
             p2p_buf = t[needed_rows_idx]
         elif g_data.rank == dst:
             p2p_buf = torch.zeros((needed_rows_idx.size(0), t.size(1)), device=g_data.device)
+        # g_logger.log('p2p data ready', src, dst, 'size',p2p_buf.size())
         dist.broadcast(p2p_buf, src, group=g_env.p2p_group_dict[(src, dst)])
-        g_logger.log('p2p bcast done', src, dst)
+        # g_logger.log('p2p bcast done', src, dst)
         if g_data.rank == dst:
             t[needed_rows_idx] = p2p_buf
-            g_logger.log('p2p dst done', src, dst)
+            # g_logger.log('p2p dst done', src, dst)
             return
 
 

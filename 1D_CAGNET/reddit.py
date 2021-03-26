@@ -136,7 +136,6 @@ class Reddit(InMemoryDataset):
         # self.partition(self[0])
         d = self.data
 
-    
         d.edge_index, _ = add_remaining_self_loops(d.edge_index, num_nodes=d.x.size(0))
 
         torch.save({"x":normalize_features(d.x), "y":d.y, "edge_index":d.edge_index,"sym_lap":fast_sym_lap(d.edge_index),
