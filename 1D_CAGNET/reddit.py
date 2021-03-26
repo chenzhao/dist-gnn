@@ -37,31 +37,17 @@ def fast_sym_lap(edge_index):
     return sym_lap_values
 
 
-def sym_lap(self):
-    print('slow normalization begin')
-    indices = self.edge_index
-    values = torch.zeros(indices.size(1))
-    deg_map = dict()
-    total = indices.size(1)
-    prog_size =  total//100
-    for i in range(indices.size(1)):
-        u = indices[0][i] 
-        v = indices[1][i]
-        if u.item() in deg_map:
-            degu = deg_map[u.item()]
-        else:
-            degu = (indices[0] == u).sum().item()
-            deg_map[u.item()] = degu
-        if v.item() in deg_map:
-            degv = deg_map[v.item()]
-        else:
-            degv = (indices[0] == v).sum().item()
-            deg_map[v.item()] = degv
-        values[i] = 1 / (math.sqrt(degu) * math.sqrt(degv))
-        if i%prog_size==0:
-            print('slow normalization to 100:', i//prog_size)
-    print('slow normalization end')
-    return values
+def add_self_loops(edge_index, num_nodes):
+    r"""from pyg"""
+    row, col = edge_index[0], edge_index[1]
+    mask = row != col
+
+    loop_index = torch.arange(0, num_nodes, dtype=row.dtype, device=row.device)
+    loop_index = loop_index.unsqueeze(0).repeat(2, 1)
+    edge_index = torch.cat([edge_index[:, mask], loop_index], dim=1)
+    return edge_index
+
+
 
 def normalize_features(x):
     x = x / x.sum(1, keepdim=True).clamp(min=1)

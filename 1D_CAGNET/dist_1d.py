@@ -9,8 +9,9 @@ import torch.nn.functional as F
 
 from sparse_coo_tensor_cpp import sparse_coo_tensor_gpu, spmm_gpu
 
+import utils
 from dist_timer import DistTimer
-import utils 
+from dist_data import DistData
 
 run = 0
 
@@ -231,7 +232,7 @@ if __name__ == '__main__':
     g_logger = utils.DistLogger(g_env)
     g_logger.log( 'dist env inited')
 
-    g_data = utils.DistData(g_env, args.graphname)
+    g_data = DistData(g_env, args.graphname)
     g_logger.log( 'dist data inited')
 
     main()
