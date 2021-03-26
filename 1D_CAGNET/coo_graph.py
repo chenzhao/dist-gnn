@@ -55,6 +55,8 @@ class COO_Graph:
         d = torch.load(self.coo_graph_file())
         for attr in self.attrs:
             setattr(self, attr, d[attr])
+        self.DAD_idx = self.DAD_coo._indices()
+        self.DAD_val = self.DAD_coo._values()
 
     def save_coo_file(self):
         os.makedirs(os.path.dirname(self.coo_graph_file()), exist_ok=True)
@@ -76,8 +78,8 @@ class COO_Graph:
         self.test_mask  = d['split'] == 3
 
     def process_for_gcn(self):
-        DAD_idx = add_self_loops(self.adj_coo, self.num_nodes)
-        DAD_val = sym_lap(self.DAD_idx)
+        DAD_idx = add_self_loops(self.adj_idx, self.num_nodes)
+        DAD_val = sym_lap(DAD_idx)
         self.DAD_coo = torch.sparse_coo_tensor(DAD_idx, DAD_val, (self.num_nodes, self.num_nodes)).coalesce()
         self.DAD_idx = self.DAD_coo._indices()
         self.DAD_val = self.DAD_coo._values()
@@ -93,12 +95,10 @@ class COO_SmallerReddit(COO_Graph):
 
 
 def main():
-    # reddit = COO_Reddit()
-    # smaller_reddit = COO_SmallerReddit()
+    smaller_reddit = COO_SmallerReddit()
+    reddit = COO_Reddit()
     pass
 
 
 if __name__ == '__main__':
-    os.makedirs('./test/noexist/', exist_ok=True)
-    torch.save({1:2}, './test/noexist/data.pt')
     main()
