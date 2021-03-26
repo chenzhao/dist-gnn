@@ -30,10 +30,6 @@ def add_self_loops(edge_index, num_nodes):
     edge_index = torch.cat([edge_index[:, mask], loop_index], dim=1)
     return edge_index
 
-def coalesce_coo(coo):
-    torch.sparse.coalesce
-    pass
-
 
 class COO_Graph:
     def torch_ready_data_file(self):
@@ -61,6 +57,7 @@ class COO_Graph:
             setattr(self, attr, d[attr])
 
     def save_coo_file(self):
+        os.makedirs(os.path.dirname(self.coo_graph_file()), exist_ok=True)
         torch.save(dict((attr, getattr(self, attr)) for attr in self.attrs), self.coo_graph_file())
 
     def load_torch_data_file(self):
@@ -96,10 +93,12 @@ class COO_SmallerReddit(COO_Graph):
 
 
 def main():
-    reddit = COO_Reddit()
+    # reddit = COO_Reddit()
     # smaller_reddit = COO_SmallerReddit()
     pass
 
 
 if __name__ == '__main__':
+    os.makedirs('./test/noexist/', exist_ok=True)
+    torch.save({1:2}, './test/noexist/data.pt')
     main()
