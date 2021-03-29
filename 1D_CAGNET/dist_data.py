@@ -96,11 +96,11 @@ class DistData(DistUtil):
                         nz_col_dict[(i,j)] = torch.unique(col_ij)
                         if rank==0:
                             print('nz col',i,j, nz_col_dict[(i,j)].size() )
-            for i in range(world_size):
-                am_partitions[i] = torch.sparse_coo_tensor(am_partitions[i], av_partitions[i], size=(node_count, sizes[i]), requires_grad=False).t().coalesce()
+            am_local = torch.sparse_coo_tensor(am_partitions[rank], av_partitions[rank], size=(node_count, sizes[rank]),
+                                               requires_grad=False).coalesce()
             input_partitions = torch.split(inputs, math.ceil(inputs.size(0)/world_size), dim=0)
         # print('Rank',rank,'parted')
-        return input_partitions[rank], am_partitions[rank], am_pbyp, nz_col_dict
+        return input_partitions[rank], am_local, am_pbyp, nz_col_dict
 
 
 if __name__ == '__main__':

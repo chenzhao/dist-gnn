@@ -15,8 +15,8 @@ class DistEnv:
         self.init_dist_groups()
 
     def init_device(self):
-        self.local_device = torch.device('cuda', self.rank)
-        torch.cuda.set_device(self.local_device)
+        self.device = torch.device('cuda', self.rank)
+        torch.cuda.set_device(self.device)
 
     def barrier_all(self):
         dist.barrier(self.world_group)
@@ -36,7 +36,7 @@ class DistUtil:
     def __init__(self, env):
         self.env = env
         self.rank = env.rank
-        self.device = env.local_device
+        self.device = env.device
         self.world_size = env.world_size
         self.world_group = env.world_group
 
