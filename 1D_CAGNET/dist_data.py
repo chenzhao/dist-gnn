@@ -11,9 +11,14 @@ from utils import DistUtil
 from coo_graph import COO_SmallerReddit, COO_Reddit
 
 
+class Partitioner:
+    pass
+
+
 class DistData(DistUtil):
     def __init__(self, env, graph_name):
         super().__init__(env)
+        self.graph_name = graph_name
         if graph_name == "Reddit":
             self.g = COO_Reddit()
         elif graph_name == "SmallerReddit":
@@ -24,26 +29,30 @@ class DistData(DistUtil):
         if os.path.exists(self.parted_data_file()):
             self.load_local_part()
         else:
-            self.partition_1d()
+            self.local_features, self.local_adj, self.local_adj_parts, self.nz_col_dict = \
+                DistData.CAGNET_oned(self.rank, self.world_size, self.g.features, self.g.DAD_idx, self.g.DAD_val)
             self.save_local_part()
         # print('Rank',self.rank,'data ready')
+        self.local_data_to_device()
 
     def load_local_part(self):
+        d = torch.load(self.parted_data_file())
+        self.local_features, self.local_adj, self.local_adj_parts, self.nz_col_dict = d['feat'],d['adj'],d['parts'],d['nz']
         pass
 
     def save_local_part(self):
-        pass
+        os.makedirs(os.path.dirname(self.parted_data_file()), exist_ok=True)
+        d = {'feat':self.local_features, 'adj':self.local_adj, 'parts':self.local_adj_parts, 'nz': self.nz_col_dict}
+        torch.save(d, self.parted_data_file())
 
     def parted_data_file(self):
         return os.path.join('..', 'coo_graph_data', self.graph_name, 'parted', 'part%d.pt'%self.rank)
 
-    def partition_1d(self):
-        self.local_features, self.local_adj, self.local_adj_parts, self.nz_col_dict = \
-            DistData.CAGNET_oned(self.rank, self.world_size, self.features, self.adj_indices, self.adj_values)
+    def local_data_to_device(self):
         self.local_features = self.local_features.to(self.device)
         self.local_adj = self.local_adj.to(self.device)
         for i in range(self.world_size):
-            self.local_adj_parts[i] = self.local_adj_parts[i].t().coalesce().to(self.device)
+            self.local_adj_parts[i] = self.local_adj_parts[i].to(self.device)
 
     @staticmethod
     def split_coo_with_values(adj_matrix, adj_values, node_count, world_size, dim):
@@ -82,7 +91,7 @@ class DistData(DistUtil):
                         if rank==0:
                             print('nz col',i,j, nz_col_dict[(i,j)].size() )
             for i in range(world_size):
-                am_partitions[i] = torch.sparse_coo_tensor(am_partitions[i], av_partitions[i], size=(node_count, sizes[i]), requires_grad=False).coalesce()
+                am_partitions[i] = torch.sparse_coo_tensor(am_partitions[i], av_partitions[i], size=(node_count, sizes[i]), requires_grad=False).t().coalesce()
             input_partitions = torch.split(inputs, math.ceil(inputs.size(0)/world_size), dim=0)
         # print('Rank',rank,'parted')
         return input_partitions[rank], am_partitions[rank], am_pbyp, nz_col_dict

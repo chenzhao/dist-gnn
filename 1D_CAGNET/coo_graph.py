@@ -8,7 +8,7 @@ def sym_lap(edge_index):
     d_rsqrt = torch.rsqrt(counts.to(torch.double))
     edge_count = edge_index.size(1)
     sym_lap_values = torch.zeros(edge_count)
-    prog_size =  edge_count//100
+    prog_size = edge_count//100
     for i in range(edge_count):
         # d_u = d_rsqrt[inverse[i]]
         u = edge_index[0][i]

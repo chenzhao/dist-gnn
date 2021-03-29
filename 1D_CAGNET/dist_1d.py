@@ -230,10 +230,10 @@ if __name__ == '__main__':
 
     g_timer = DistTimer(g_env)
     g_logger = utils.DistLogger(g_env)
-    g_logger.log( 'dist env inited')
+    g_logger.log('dist env inited')
 
     g_data = DistData(g_env, args.graphname)
-    g_logger.log( 'dist data inited')
+    g_logger.log('dist data inited')
 
     main()
 
