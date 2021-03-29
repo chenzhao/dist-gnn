@@ -43,6 +43,12 @@ class DistData(DistUtil):
     def save_local_part(self):
         os.makedirs(os.path.dirname(self.parted_data_file()), exist_ok=True)
         d = {'feat':self.local_features, 'adj':self.local_adj, 'parts':self.local_adj_parts, 'nz': self.nz_col_dict}
+
+        print('save local')
+        print('g:', self.g.num_nodes, self.g.num_edges, self.g.num_features, self.g.num_classes)
+        print(self.local_features.size())
+        print(self.local_adj.size())
+        print(self.local_adj_parts[0].size())
         torch.save(d, self.parted_data_file())
 
     def parted_data_file(self):
