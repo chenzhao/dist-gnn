@@ -97,8 +97,5 @@ class DistData(DistUtil):
         return input_partitions[rank], am_partitions[rank], am_pbyp, nz_col_dict
 
 
-
-
-
 if __name__ == '__main__':
     pass
