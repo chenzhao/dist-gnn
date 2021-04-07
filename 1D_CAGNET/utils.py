@@ -2,8 +2,10 @@ import os
 import datetime as dt
 import torch
 import torch.distributed as dist
-from fast_reddit import Reddit, SmallerReddit
 import math
+import time
+import statistics
+from collections import defaultdict
 
 
 class DistEnv:
@@ -48,37 +50,35 @@ class DistLogger(DistUtil):
         with open('all_log_%d.txt'%self.rank, 'a+') as f:
             print(head, *args, file=f, flush=True)
 
-    def log_one(self, *args, rank=-1, group=None):
-        if group is None:
-            print(dt.datetime.now(), '[Rank %2d] '%self.rank, end='')
-            print(*args, flush=True)
-            with open('all_log_%d.txt'%g_rank, 'a+') as f:
-                print(dt.datetime.now(), '[Rank %2d] '%self.rank, end='', file=f)
-                print(*args, file=f, flush=True)
-        else:
-            assert(group is not None)
-            dist.barrier(group)
-            if self.rank==rank:
-                print(dt.datetime.now(), '[Rank all] ', end='')
-                print(*args)
 
+class DistTimer(DistUtil):
+    def __init__(self, env):
+        super().__init__(env)
+        self.start_time_dict = {}
+        self.duration_dict = defaultdict(float)
+        self.count_dict = defaultdict(int)
 
+    def summary(self):
+        s = "\n".join("%s %.4fs %4d" % (key, self.duration_dict[key], self.count_dict[key]) for key in self.duration_dict)
+        return s
 
-def some_value():
-    print('some value')
-    return 1233
+    def barrier_all(self, subset=False):
+        self.start('barrier')
+        self.env.barrier_all()
+        self.stop('barrier')
 
-class O:
-    p = some_value()
-    def __init__(self):
-        self.p+=1
-        print('O init', self.p)
+    def start(self, key):
+        self.start_time_dict[key] = time.time()
+        return self.start_time_dict[key]
 
-class OO(O):
-    p=233
+    def stop(self, key, *other_keys):
+        def log(k, d=time.time() - self.start_time_dict[key]):
+            self.duration_dict[k]+=d
+            self.count_dict[k]+=1
+        map(log, [key]+list(other_keys))
+        return
 
 
 if __name__ == '__main__':
-    o = O()
-    o2 = OO()
-    o3 = O()
+    pass
+

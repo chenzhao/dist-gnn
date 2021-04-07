@@ -55,8 +55,11 @@ class COO_Graph:
         d = torch.load(self.coo_graph_file())
         for attr in self.attrs:
             setattr(self, attr, d[attr])
-        self.DAD_idx = self.DAD_coo._indices()
-        self.DAD_val = self.DAD_coo._values()
+
+    @property
+    def DAD_idx(self): return self.DAD_coo._indices()
+    @property
+    def DAD_val(self): return self.DAD_coo._values()
 
     def save_coo_file(self):
         os.makedirs(os.path.dirname(self.coo_graph_file()), exist_ok=True)
@@ -77,21 +80,18 @@ class COO_Graph:
         self.val_mask   = d['split'] == 2
         self.test_mask  = d['split'] == 3
 
-    def process_for_gcn(self):
+    def process_for_gcn(self):  # make the coo format sym lap matrix
         DAD_idx = add_self_loops(self.adj_idx, self.num_nodes)
         DAD_val = sym_lap(DAD_idx)
         self.DAD_coo = torch.sparse_coo_tensor(DAD_idx, DAD_val, (self.num_nodes, self.num_nodes)).coalesce()
-        self.DAD_idx = self.DAD_coo._indices()
-        self.DAD_val = self.DAD_coo._values()
-    pass
 
 
 class COO_Reddit(COO_Graph):
     graph_name = "Reddit"
 
+
 class COO_SmallerReddit(COO_Graph):
     graph_name = "SmallerReddit"
-    pass
 
 
 def main():
