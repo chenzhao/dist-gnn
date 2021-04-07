@@ -59,7 +59,8 @@ class DistTimer(DistUtil):
         self.count_dict = defaultdict(int)
 
     def summary(self):
-        s = "\n".join("%s %.4fs %4d" % (key, self.duration_dict[key], self.count_dict[key]) for key in self.duration_dict)
+        # print('summary', len(self.count_dict))
+        s = 'timer summary:\n' +  "\n".join("%s %.4fs %4d" % (key, self.duration_dict[key], self.count_dict[key]) for key in self.duration_dict)
         return s
 
     def barrier_all(self, subset=False):
@@ -75,7 +76,9 @@ class DistTimer(DistUtil):
         def log(k, d=time.time() - self.start_time_dict[key]):
             self.duration_dict[k]+=d
             self.count_dict[k]+=1
-        map(log, [key]+list(other_keys))
+        log(key)
+        for k in other_keys:
+            log(k)
         return
 
 

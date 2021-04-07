@@ -10,19 +10,18 @@ import torch.nn.functional as F
 from sparse_coo_tensor_cpp import sparse_coo_tensor_gpu, spmm_gpu
 
 import utils
-from dist_timer import DistTimer
 from dist_data import DistData
 
 run = 0
 
 def outer_product2(inputs, ag):
-    g_timer.start_time('mm')
+    g_timer.start('mm')
     grad_weight = torch.mm(inputs, ag) # (H^(l-1))^T * (A * G^l)
-    g_timer.stop_time('mm', 'comp')
+    g_timer.stop('mm', 'comp')
     
-    g_timer.start_time('all reduce')
+    g_timer.start('all reduce')
     dist.all_reduce(grad_weight, op=dist.ReduceOp.SUM, group=g_env.world_group)
-    g_timer.stop_time('all reduce', 'comm')
+    g_timer.stop('all reduce', 'comm')
     return grad_weight
 
 
@@ -58,16 +57,16 @@ def broad_func(node_count, am_partitions, inputs):
         elif i == g_env.world_size - 1:
             inputs_recv = torch.zeros((am_partitions[i].size(1), inputs.size(1)), device=device)
         g_timer.barrier_all()
-        g_timer.start_time('broadcast')
+        g_timer.start('broadcast')
         dist.broadcast(inputs_recv, src=i, group=g_env.world_group)
         # p2p_broadcast(inputs_recv, i)
-        g_timer.stop_time('broadcast','comm')
+        g_timer.stop('broadcast','comm')
 
-        g_timer.start_time('spmm')
+        g_timer.start('spmm')
         spmm_gpu(am_partitions[i].indices()[0].int(), am_partitions[i].indices()[1].int(), 
                         am_partitions[i].values(), am_partitions[i].size(0), 
                         am_partitions[i].size(1), inputs_recv, z_loc)
-        g_timer.stop_time('spmm', 'comp')
+        g_timer.stop('spmm', 'comp')
     return z_loc
 
 
@@ -78,9 +77,9 @@ class GCNFunc(torch.autograd.Function):
         ctx.am_partitions = am_partitions
         ctx.activation_func = activation_func
         z = broad_func(adj_matrix.size(0), am_partitions, inputs)
-        g_timer.start_time('mm')
+        g_timer.start('mm')
         z = torch.mm(z, weight)
-        g_timer.stop_time('mm', 'comp')
+        g_timer.stop('mm', 'comp')
 
         z.requires_grad = True
         ctx.z = z
@@ -99,9 +98,9 @@ class GCNFunc(torch.autograd.Function):
         # First backprop equation
         ag = broad_func(adj_matrix.size(0), am_partitions, grad_output)
 
-        g_timer.start_time('mm')
+        g_timer.start('mm')
         grad_input = torch.mm(ag, weight.t())
-        g_timer.stop_time('mm', 'comp')
+        g_timer.stop('mm', 'comp')
         # Second backprop equation (reuses the A * G^l computation)
         grad_weight = outer_product2(inputs.t(), ag)
 
@@ -159,12 +158,12 @@ def main():
         g_logger.log(f"Starting training... run {i}")
         outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer)
         # dist.barrier(g_world_group)
-        g_timer.start_time('train')
+        g_timer.start('train')
         for epoch in range(1, args.epochs):
             outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer)
             if epoch%10==0:
                 g_logger.log("Epoch: {:03d}".format(epoch))
-        g_timer.stop_time('train')
+        g_timer.stop('train')
 
     n_per_proc = math.ceil(g_data.g.features.size(0) / g_env.world_size)
     output_parts = [torch.zeros(n_per_proc, g_data.g.num_classes, device=g_env.device) for i in range(g_env.world_size)]
@@ -181,6 +180,7 @@ def main():
     outputs = torch.cat(output_parts, dim=0)
 
     train_acc, val_acc, test_acc = test(outputs, am_pbyp[0].size(1))
+    g_logger.log(g_timer.summary())
     g_logger.log( 'Epoch: {:03d}, Train: {:.4f}, Val: {:.4f}, Test: {:.4f}'.format(args.epochs, train_acc, val_acc, test_acc))
     return outputs
 
@@ -199,7 +199,7 @@ if __name__ == '__main__':
     print(args)
     g_env = utils.DistEnv(args.local_rank, args.world_size)
 
-    g_timer = DistTimer(g_env)
+    g_timer = utils.DistTimer(g_env)
     g_logger = utils.DistLogger(g_env)
     g_logger.log('dist env inited')
 
