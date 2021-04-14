@@ -11,10 +11,6 @@ from utils import DistUtil
 from coo_graph import COO_SmallerReddit, COO_Reddit
 
 
-class Partitioner:
-    pass
-
-
 class DistData(DistUtil):
     def __init__(self, env, graph_name):
         super().__init__(env)

@@ -9,10 +9,11 @@ from collections import defaultdict
 
 
 class DistEnv:
-    def __init__(self, local_rank, world_size):
+    def __init__(self, local_rank, world_size, backend='nccl'):
         assert(local_rank>=0)
         assert(world_size>0)
         self.rank, self.world_size  = local_rank, world_size
+        self.backend = backend
         self.init_device()
         self.init_dist_groups()
 
@@ -24,7 +25,7 @@ class DistEnv:
         dist.barrier(self.world_group)
 
     def init_dist_groups(self):
-        dist.init_process_group(backend='nccl')
+        dist.init_process_group(backend=self.backend)
         self.world_group = dist.new_group(list(range(self.world_size)))
         self.p2p_group_dict = {}
         for src in range(self.world_size):
@@ -60,10 +61,11 @@ class DistTimer(DistUtil):
 
     def summary(self):
         # print('summary', len(self.count_dict))
-        s = 'timer summary:\n' +  "\n".join("%s %.4fs %4d" % (key, self.duration_dict[key], self.count_dict[key]) for key in self.duration_dict)
+        s = '\ntimer summary:\n' +  "\n".join("%6.2fs %5d %s" % (self.duration_dict[key], self.count_dict[key], key) for key in self.duration_dict)
         return s
 
-    def barrier_all(self, subset=False):
+    def barrier_all(self):
+        return
         self.start('barrier')
         self.env.barrier_all()
         self.stop('barrier')

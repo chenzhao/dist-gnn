@@ -131,4 +131,5 @@ data/
 *.txt
 *.swp
 .idea
+*_data
 
