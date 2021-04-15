@@ -11,25 +11,20 @@ import networkx
 import metis
 
 
-
-# a reorder example:
-# parts        = 0,1,0,1,0,1
-# node_ids     = 1,2,5,6,7,8
-# will sort to = 1,5,7,2,6,8
-# e.g. id=5 should be loc to idx=2(which is idx of old id=2), so change id=5 to 2.
-# node_mapping = 1:1, 5:2, 7:5, ...
-
-    # parted_ids = [(p,node_ids[old_node_idx]) for old_node_idx, p in enumerate(parts)]
-
-
-def partition(r, P=8): # to be tensorified
-    x, y, edge_index, split = map(r.data_dict.get, ['x', 'y', 'edge_index', 'split'])
+def metis_reorder(edge_index, x, y, split, P=8):
+    # a reorder with gap example:
+    # parts        = 0,1,0,1,0,1
+    # node_ids     = 1,2,5,6,7,8
+    # will sort to = 1,5,7,2,6,8
+    # e.g. the old id=5 should be loc to idx=2(which is idx of old id=2), so change id=5 to 2.
+    # e.g. id=7 should be loc to idx=3(which is idx of old id=5), so change id=7 to 5.
+    # node_mapping = 1:1, 5:2, 7:5, ...
 
     nxg = to_networkx(Data(edge_index=edge_index))
     print('partition begin')
     (edgecuts, parts) = metis.part_graph(nxg, P)
     print('parted', edgecuts, len(parts))
-    node_ids = list(nxg)
+    node_ids = list(nxg) # only works when no gap in ids
     parted_ids = [(p,old_node_id) for p, old_node_id in zip(parts, node_ids)]
     sorted_node_ids = [node_id for p, node_id in sorted(parted_ids)]
 
@@ -41,19 +36,29 @@ def partition(r, P=8): # to be tensorified
     print('node swapped')
 
     def swap_tensor(t):
-        pass
+        # st = torch.empty_like(t)
+        st = t[sorted_node_ids]
+        return st
 
     x = swap_tensor(x)
     y = swap_tensor(y)
     split = swap_tensor(split)
 
+    return edge_index, x, y, split
+
+
+def part_pyg_graph(pyg_graph):
+    edge_index, x, y, split = map(pyg_graph.data_dict.get, ['edge_index', 'x', 'y', 'split'])
+    return metis_reorder(edge_index, x, y, split)
 
 
 def main():
-    # data_root = os.path.join('..', 'torch_ready_data', 'Reddit')
-    # Reddit(data_root)
-    data_root = os.path.join('..', 'torch_ready_data', 'SmallerReddit')
-    r = SmallerReddit(data_root)
+    #r = Reddit()
+    sr = SmallerReddit()
+    edge_index, x, y, split = part_pyg_graph(sr)
+    parted_data_path = os.path.join('..', 'torch_ready_data', 'PartedSmallerReddit', 'processed', 'data.pt')
+    os.makedirs(os.path.dirname(parted_data_path), exist_ok=True)
+    torch.save({"x": x, "y": y, "edge_index": edge_index, "split": split}, parted_data_path)
 
     # Cora()
     # Amazon()
