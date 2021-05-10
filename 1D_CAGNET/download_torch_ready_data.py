@@ -9,13 +9,12 @@ from torch_geometric.data import (InMemoryDataset, Data, download_url, extract_z
 
 
 class TorchGeometricDataSet(InMemoryDataset):
+    processed_file_names = 'data.pt'
     def __init__(self, root, transform=None, pre_transform=None):
+        # os.makedirs(os.path.dirname(root), exist_ok=True)
         super().__init__(root, transform, pre_transform)
         self.data_dict = torch.load(self.processed_paths[0])
 
-    @property
-    def processed_file_names(self):
-        return 'data.pt'
 
     def download(self):
         path = download_url(self.url, self.raw_dir)
@@ -29,6 +28,8 @@ class Reddit(TorchGeometricDataSet):
     def __init__(self):
         root = os.path.join('..', 'torch_ready_data', 'Reddit')
         super().__init__(root)
+
+    def download(self):super().download()
 
     @staticmethod
     def load_reddit_npz(raw_dir):
@@ -55,19 +56,56 @@ class SmallerReddit(TorchGeometricDataSet):
         root = os.path.join('..', 'torch_ready_data', 'SmallerReddit')
         super().__init__(root)
 
+    def download(self):super().download()
     def process(self):
         edge_index, x, y, split = Reddit.load_reddit_npz(self.raw_dir)
 
         max_node = smaller_size = x.size(0)//20
         smaller_mask = (edge_index[0]<max_node) & (edge_index[1]<max_node)
 
-        torch.save({"x":x[:smaller_size, :], "y":y[:smaller_size],
-                    "edge_index":edge_index[:, smaller_mask], "split":split[:smaller_size]}, self.processed_paths[0])
+        torch.save({"x":x[:smaller_size, :].clone(), "y":y[:smaller_size].clone(),
+                    "edge_index":edge_index[:, smaller_mask].clone(), "split":split[:smaller_size].clone()}, self.processed_paths[0])
+
+class OneQuarterReddit(TorchGeometricDataSet):
+    url = 'https://data.dgl.ai/dataset/reddit.zip'
+    raw_file_names = ['reddit_data.npz', 'reddit_graph.npz']
+    def __init__(self):
+        root = os.path.join('..', 'torch_ready_data', 'OneQuarterReddit')
+        super().__init__(root)
+
+    def download(self):super().download()
+    def process(self):
+        edge_index, x, y, split = Reddit.load_reddit_npz(self.raw_dir)
+
+        max_node = smaller_size = x.size(0)//4
+        smaller_mask = (edge_index[0]<max_node) & (edge_index[1]<max_node)
+
+        torch.save({"x":x[:smaller_size, :].clone(), "y":y[:smaller_size].clone(),
+                    "edge_index":edge_index[:, smaller_mask].clone(), "split":split[:smaller_size].clone()}, self.processed_paths[0])
+
+class TinyReddit(TorchGeometricDataSet):
+    url = 'https://data.dgl.ai/dataset/reddit.zip'
+    raw_file_names = ['reddit_data.npz', 'reddit_graph.npz']
+    def __init__(self):
+        root = os.path.join('..', 'torch_ready_data', 'TinyReddit')
+        super().__init__(root)
+
+    def download(self):super().download()
+    def process(self):
+        edge_index, x, y, split = Reddit.load_reddit_npz(self.raw_dir)
+
+        max_node = smaller_size = 64
+        smaller_mask = (edge_index[0]<max_node) & (edge_index[1]<max_node)
+
+        torch.save({"x":x[:smaller_size, :].clone(), "y":y[:smaller_size].clone(),
+                    "edge_index":edge_index[:, smaller_mask].clone(), "split":split[:smaller_size].clone()}, self.processed_paths[0])
 
 
 def main():
-    Reddit()
-    SmallerReddit()
+    # Reddit()
+    TinyReddit()
+    # SmallerReddit()
+    # OneQuarterReddit()
     # Cora()
     # Amazon()
     pass

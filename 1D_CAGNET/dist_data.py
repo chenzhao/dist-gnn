@@ -8,21 +8,16 @@ from collections import defaultdict
 
 
 from utils import DistUtil
-from coo_graph import COO_SmallerReddit, COO_Reddit
+from coo_graph import COO_Graph
 
 
 class DistData(DistUtil):
     def __init__(self, env, graph_name):
         super().__init__(env)
         self.graph_name = graph_name
-        if graph_name == "Reddit":
-            self.g = COO_Reddit()
-        elif graph_name == "SmallerReddit":
-            self.g = COO_SmallerReddit()
-        else:
-            assert False
+        self.g = COO_Graph(graph_name)
         # print('data loaded to host mem')
-        if os.path.exists(self.parted_data_file()):
+        if os.path.exists(self.parted_data_file()):# and False:
             self.load_local_part()
         else:
             self.local_features, self.local_adj, self.local_adj_parts, self.nz_col_dict = \
@@ -87,10 +82,13 @@ class DistData(DistUtil):
     def CAGNET_oned(rank, world_size, inputs, adj_indices, adj_values):
         node_count = inputs.size(0)
         nz_col_dict = {}
+        # print(rank, 'total nz', adj_values.size())
         am_partitions, av_partitions, sep = DistData.split_coo_with_values(adj_indices, adj_values, node_count, world_size, 1)
         sizes = [sep[i+1]-sep[i] for i in range(world_size)]
         am_pbyp, av_pbyp, _ = DistData.split_coo_with_values(am_partitions[rank], av_partitions[rank], node_count, world_size, 0)
+        # print('all nz', rank, av_partitions[rank].size())
         for i in range(world_size):
+            print('block nz', rank, i, av_pbyp[i].size())
             am_pbyp[i] = torch.sparse_coo_tensor(am_pbyp[i], av_pbyp[i], size=(sizes[i], sizes[rank])).coalesce()
             # find nz cols for p2p bcast
             for j in range(len(am_pbyp)):
@@ -99,8 +97,9 @@ class DistData(DistUtil):
                     j_mask = ((adj_indices[1,:]>=sep[j])&(adj_indices[1,:]<sep[j+1]))
                     col_ij = adj_indices[1, (i_mask & j_mask).nonzero().squeeze(1)] - sep[j]
                     nz_col_dict[(i,j)] = torch.unique(col_ij)
-                    #if rank==0:
-                        #print('nz col',i,j, nz_col_dict[(i,j)].size() )
+                    if rank==0:
+                        # print('nz col',i,j, nz_col_dict[(i,j)].size() )
+                        pass
         am_local = torch.sparse_coo_tensor(am_partitions[rank], av_partitions[rank], size=(node_count, sizes[rank])).coalesce()
         input_partitions = torch.split(inputs, math.ceil(inputs.size(0)/world_size), dim=0)
         # print('Rank',rank,'parted')

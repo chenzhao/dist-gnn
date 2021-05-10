@@ -41,7 +41,7 @@ def p2p_broadcast(t, src):
             p2p_buf = t[needed_rows_idx]
         elif g_env.rank == dst:
             p2p_buf = torch.zeros((needed_rows_idx.size(0), t.size(1)), device=g_env.device)
-        g_logger.log('p2p data ready', src, dst, 'needed size',p2p_buf.size(0), 'full size', t.size(0))
+        # g_logger.log('p2p data ready', src, dst, 'needed size',p2p_buf.size(0), 'full size', t.size(0))
         dist.broadcast(p2p_buf, src, group=g_env.p2p_group_dict[(src, dst)])
         # g_logger.log('p2p bcast done', src, dst)
         if g_env.rank == dst:
@@ -49,14 +49,34 @@ def p2p_broadcast(t, src):
             # g_logger.log('p2p dst done', src, dst)
             return
 
+cur_epoch = 0
+cache_features = [None]*8
+cache_layer2 = [None]*8
+cache_backward_layer1 = [None]*8
+cache_backward_layer2 = [None]*8
+cache_enabled = True
 
-def broad_func(node_count, am_partitions, inputs):
+def broad_func(node_count, am_partitions, inputs, btype=None):
+    global cache_features
     device = g_env.device
     n_per_proc = math.ceil(float(node_count) / g_env.world_size)
     z_loc = torch.zeros((am_partitions[0].size(0), inputs.size(1)), device=device)
     inputs_recv = torch.zeros((n_per_proc, inputs.size(1)), device=device)
 
+
     for i in range(g_env.world_size):
+        layer1_use_cache = cur_epoch>=1
+
+        layer2_use_cache = cur_epoch>=50 and cur_epoch%2==0
+        layer2_use_cache = False
+
+        backward_layer2_use_cache = cur_epoch>=50 and cur_epoch%2==0
+        backward_layer2_use_cache = False
+
+        backward_layer1_use_cache = cur_epoch>=50 and cur_epoch%2==0
+        backward_layer1_use_cache = False
+
+
         if i == g_env.rank:
             inputs_recv = inputs.clone()
         elif i == g_env.world_size - 1:
@@ -66,10 +86,51 @@ def broad_func(node_count, am_partitions, inputs):
         torch.cuda.synchronize()
 
         g_timer.start('broadcast')
-        # dist.broadcast(inputs_recv, src=i, group=g_env.world_group)
-        p2p_broadcast(inputs_recv, i)
+        if not cache_enabled:
+            dist.broadcast(inputs_recv, src=i, group=g_env.world_group)
+        else:
+            if btype=='layer1':
+                if layer1_use_cache:
+                    # g_logger.log(cur_epoch, i, 'use cache', btype)
+                    if g_env.rank!=i:
+                        # g_logger.log(cur_epoch, i, 'no copy', btype, type(inputs_recv), inputs_recv.size())
+                        inputs_recv = cache_features[i]
+                    else:
+                        # g_logger.log(cur_epoch, i, 'do nothing', btype, type(inputs_recv), inputs_recv.size())
+                        pass
+                else:
+                    dist.broadcast(inputs_recv, src=i, group=g_env.world_group)
+                    # if cache_features[i] is not None:
+                        # g_logger.log(cur_epoch, i,'normal broadcast', torch.sum(inputs_recv), torch.sum(cache_features[i] ))
+                    cache_features[i] = inputs_recv.clone()
+            elif btype=='layer2':
+                if layer2_use_cache:
+                    if g_env.rank!=i:
+                        inputs_recv = cache_layer2[i]
+                else:
+                    dist.broadcast(inputs_recv, src=i, group=g_env.world_group)
+                    # if cache_layer2[i] is not None:
+                        # g_logger.log(cur_epoch, i,'normal broadcast', torch.sum(inputs_recv), torch.sum(cache_layer2[i] ))
+                    cache_layer2[i] = inputs_recv.clone()
+            elif btype=='backward_layer2':
+                if backward_layer2_use_cache:
+                    if g_env.rank!=i:
+                        inputs_recv = cache_backward_layer2[i]
+                else:
+                    dist.broadcast(inputs_recv, src=i, group=g_env.world_group)
+                    cache_backward_layer2[i] = inputs_recv.clone()
+            elif btype=='backward_layer1':
+                if backward_layer1_use_cache:
+                    if g_env.rank!=i:
+                        inputs_recv = cache_backward_layer1[i]
+                else:
+                    dist.broadcast(inputs_recv, src=i, group=g_env.world_group)
+                    cache_backward_layer1[i] = inputs_recv.clone()
+            else:
+                dist.broadcast(inputs_recv, src=i, group=g_env.world_group)
+        # p2p_broadcast(inputs_recv, i)
         torch.cuda.synchronize()  # comm or comp?
-        g_timer.stop('broadcast')#,'comm')
+        g_timer.stop('broadcast', btype)#,'comm')
 
         g_timer.barrier_all()
         torch.cuda.synchronize()
@@ -87,11 +148,12 @@ def broad_func(node_count, am_partitions, inputs):
 
 class GCNFunc(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, inputs, weight, adj_matrix, am_partitions,  activation_func):
+    def forward(ctx, inputs, weight, adj_matrix, am_partitions,  activation_func, btype):
         ctx.save_for_backward(inputs, weight, adj_matrix)
         ctx.am_partitions = am_partitions
         ctx.activation_func = activation_func
-        z = broad_func(adj_matrix.size(0), am_partitions, inputs)
+        ctx.btype = btype
+        z = broad_func(adj_matrix.size(0), am_partitions, inputs, btype=btype)
 
         torch.cuda.synchronize()
         g_timer.start('mm')
@@ -106,6 +168,7 @@ class GCNFunc(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         inputs, weight, adj_matrix = ctx.saved_tensors
+        btype = ctx.btype
         am_partitions = ctx.am_partitions
 
         with torch.set_grad_enabled(True):
@@ -114,7 +177,7 @@ class GCNFunc(torch.autograd.Function):
             grad_output = sigmap
 
         # First backprop equation
-        ag = broad_func(adj_matrix.size(0), am_partitions, grad_output)
+        ag = broad_func(adj_matrix.size(0), am_partitions, grad_output, btype='backward_'+btype)
 
         torch.cuda.synchronize()
         g_timer.start('mm')
@@ -129,8 +192,8 @@ class GCNFunc(torch.autograd.Function):
 
 
 def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, local_train_mask, local_labels):
-    outputs = GCNFunc.apply(inputs, weight1, adj_matrix, am_partitions, F.relu)
-    outputs = GCNFunc.apply(outputs, weight2, adj_matrix, am_partitions, lambda x:F.log_softmax(x, dim=1))
+    outputs = GCNFunc.apply(inputs, weight1, adj_matrix, am_partitions, F.relu, 'layer1')
+    outputs = GCNFunc.apply(outputs, weight2, adj_matrix, am_partitions, lambda x:F.log_softmax(x, dim=1), 'layer2')
 
     optimizer.zero_grad()
 
@@ -156,6 +219,7 @@ def test(outputs, vertex_count):
 
 def main():
     global run
+    global cur_epoch
     inputs_loc, adj_matrix_loc, am_pbyp = g_data.local_features, g_data.local_adj, g_data.local_adj_parts 
     device = g_env.device
 
@@ -179,11 +243,12 @@ def main():
         local_labels = torch.split(g_data.g.labels, am_pbyp[0].size(0), dim=0)[g_env.rank]
 
         for epoch in range(args.epochs):
+            cur_epoch = epoch
             g_timer.start('train')
             outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, local_train_mask, local_labels)
             g_timer.stop('train')
             if epoch%10==0:
-                g_logger.log("Epoch: {:03d}".format(epoch))
+                g_logger.log("Epoch: {:03d}".format(epoch), oneline=True)
 
     n_per_proc = math.ceil(g_data.g.features.size(0) / g_env.world_size)
     output_parts = [torch.zeros(n_per_proc, g_data.g.num_classes, device=g_env.device) for i in range(g_env.world_size)]
@@ -200,8 +265,8 @@ def main():
     outputs = torch.cat(output_parts, dim=0)
 
     train_acc, val_acc, test_acc = test(outputs, am_pbyp[0].size(1))
-    g_logger.log(g_timer.summary())
-    g_logger.log( 'Epoch: {:03d}, Train: {:.4f}, Val: {:.4f}, Test: {:.4f}'.format(args.epochs, train_acc, val_acc, test_acc))
+    g_logger.log(g_timer.summary_all(), rank=0)
+    g_logger.log( 'Epoch: {:03d}, Train: {:.4f}, Val: {:.4f}, Test: {:.4f}'.format(args.epochs, train_acc, val_acc, test_acc), rank=0)
     return outputs
 
 
@@ -210,7 +275,7 @@ if __name__ == '__main__':
     parser.add_argument("--local_rank", type=int)
     parser.add_argument("--world_size", type=int, default=8)
     parser.add_argument("--backend", type=str, default="nccl")
-    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--run_count", type=int, default=1)
     parser.add_argument("--graphname", type=str, default="SmallerReddit")
     parser.add_argument("--timing", type=bool, default=True)
