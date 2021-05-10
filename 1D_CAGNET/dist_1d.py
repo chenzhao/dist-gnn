@@ -242,31 +242,34 @@ def main():
         local_train_mask = torch.split(g_data.g.train_mask.bool(), am_pbyp[0].size(0), dim=0)[g_env.rank]
         local_labels = torch.split(g_data.g.labels, am_pbyp[0].size(0), dim=0)[g_env.rank]
 
+
+
         for epoch in range(args.epochs):
             cur_epoch = epoch
             g_timer.start('train')
             outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, local_train_mask, local_labels)
             g_timer.stop('train')
-            if epoch%10==0:
-                g_logger.log("Epoch: {:03d}".format(epoch), oneline=True)
+            # if epoch%10==0:
+                # g_logger.log("Epoch: {:03d}".format(epoch), oneline=True)
+                
+            if (epoch+1)%5==0:
+                n_per_proc = math.ceil(g_data.g.features.size(0) / g_env.world_size)
+                output_parts = [torch.zeros(n_per_proc, g_data.g.num_classes, device=g_env.device) for i in range(g_env.world_size)]
 
-    n_per_proc = math.ceil(g_data.g.features.size(0) / g_env.world_size)
-    output_parts = [torch.zeros(n_per_proc, g_data.g.num_classes, device=g_env.device) for i in range(g_env.world_size)]
+                if outputs.size(0) != n_per_proc:
+                    pad_row = n_per_proc - outputs.size(0) 
+                    outputs = torch.cat((outputs, torch.cuda.FloatTensor(pad_row, g_data.g.num_classes, device=g_env.device)), dim=0)
+                dist.all_gather(output_parts, outputs) # output_parts[g_env.rank] = outputs
+                
+                padding = g_data.g.features.size(0) - n_per_proc * (g_env.world_size - 1)
+                output_parts[g_env.world_size - 1] = output_parts[g_env.world_size - 1][:padding,:]
+                outputs = torch.cat(output_parts, dim=0)
 
-    if outputs.size(0) != n_per_proc:
-        pad_row = n_per_proc - outputs.size(0) 
-        outputs = torch.cat((outputs, torch.cuda.FloatTensor(pad_row, g_data.g.num_classes, device=g_env.device)), dim=0)
+                train_acc, val_acc, test_acc = test(outputs, am_pbyp[0].size(1))
+                g_logger.log( 'Epoch: {:03d}/{:03d}, Train: {:.4f}, Val: {:.4f}, Test: {:.4f}'.format(epoch+1, args.epochs, train_acc, val_acc, test_acc), rank=0)
+                
 
-    dist.all_gather(output_parts, outputs)
-    output_parts[g_env.rank] = outputs
-    
-    padding = g_data.g.features.size(0) - n_per_proc * (g_env.world_size - 1)
-    output_parts[g_env.world_size - 1] = output_parts[g_env.world_size - 1][:padding,:]
-    outputs = torch.cat(output_parts, dim=0)
-
-    train_acc, val_acc, test_acc = test(outputs, am_pbyp[0].size(1))
-    g_logger.log(g_timer.summary_all(), rank=0)
-    g_logger.log( 'Epoch: {:03d}, Train: {:.4f}, Val: {:.4f}, Test: {:.4f}'.format(args.epochs, train_acc, val_acc, test_acc), rank=0)
+        g_logger.log(g_timer.summary_all(), rank=0)
     return outputs
 
 
