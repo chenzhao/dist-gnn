@@ -67,13 +67,13 @@ def broad_func(node_count, am_partitions, inputs, btype=None):
     for i in range(g_env.world_size):
         layer1_use_cache = cur_epoch>=1
 
-        layer2_use_cache = cur_epoch>=50 and cur_epoch%2==0
-        layer2_use_cache = False
+        layer2_use_cache = cur_epoch>=50 and cur_epoch%5!=0
+        # layer2_use_cache = False
 
-        backward_layer2_use_cache = cur_epoch>=50 and cur_epoch%2==0
+        backward_layer2_use_cache = cur_epoch>=50 and cur_epoch%5!=0
         backward_layer2_use_cache = False
 
-        backward_layer1_use_cache = cur_epoch>=50 and cur_epoch%2==0
+        backward_layer1_use_cache = cur_epoch>=50 and cur_epoch%5!=0
         backward_layer1_use_cache = False
 
 
