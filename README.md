@@ -10,6 +10,13 @@ Run download_torch_ready_data.py to prepare data.
 Run dist_1d to train GCN. Graph data cache will be created at the first time run. 
 
 
+
+# AutoRepeat: Adaptive CommUnicaTiOn REduction for Distributed GraPh NEurAl NeTworks
+
+
+
+
+
 Adaptive bcast result:
 
 https://docs.google.com/presentation/d/1oT5A3Omih0HIg2zS5E8fsN9W2-zKtL8j5f-eb2XJzWc/edit?usp=sharing
