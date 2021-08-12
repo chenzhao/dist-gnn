@@ -64,6 +64,12 @@ class COO_Graph:
         d = torch.load(self.coo_graph_file())
         for attr in self.attrs:
             setattr(self, attr, d[attr])
+        # fix wrong data
+        if self.graph_name=='Yelp':
+            print('Yelp detected')
+            self.num_classes = 100
+        elif self.graph_name=='AmazonProducts':
+            self.num_classes = 107
 
     def save_coo_file(self):
         os.makedirs(os.path.dirname(self.coo_graph_file()), exist_ok=True)
@@ -78,11 +84,25 @@ class COO_Graph:
         self.num_nodes = d['x'].size(0)
         self.num_edges = d['edge_index'].size(1)
         self.num_features = d['x'].size(1)
-        self.num_classes = torch.unique(d['y']).size(0)  # may be predefined
+        if self.graph_name=='Yelp':
+            print('Yelp detected, assign num classes 100')
+            self.num_classes = 100
+        elif self.graph_name=='AmazonProducts':
+            print('AmazonProducts detected, assign num classes 100')
+            self.num_classes = 107
+        else:
+            print('unknown dataset detected, assign num classes by counting')
+            self.num_classes = torch.unique(d['y']).size(0)  # may be predefined
 
-        self.train_mask = d['split'] == 1
-        self.val_mask   = d['split'] == 2
-        self.test_mask  = d['split'] == 3
+        if d['split']:
+            self.train_mask = d['split'] == 1
+            self.val_mask   = d['split'] == 2
+            self.test_mask  = d['split'] == 3
+        elif d['mask']:
+            self.train_mask, self.val_mask, self.test_mask  = d['mask']
+        else:
+            print('invalid torch data file')
+            raise Exception()
 
     def process_for_gcn(self):  # make the coo format sym lap matrix
         DAD_idx = add_self_loops(self.adj_idx, self.num_nodes)
@@ -105,7 +125,9 @@ def set_seed(seed=0):
 def main():
     torch.set_printoptions(precision=10)
 
-    r = COO_Graph('OneQuarterReddit')
+    r = COO_Graph('Flickr')
+    # r = COO_Graph('AmazonProducts')
+    # r = COO_Graph('Yelp')
     print(r)
     #r = COO_Graph('Reddit')
     return 

@@ -52,14 +52,14 @@ class DistData(DistUtil):
         torch.save(d, self.parted_data_file())
 
     def parted_data_file(self):
-        return os.path.join('..', 'coo_graph_data', self.graph_name, 'parted', 'part%d.pt'%self.rank)
+        return os.path.join('..', 'coo_graph_data', self.graph_name, 'parted', 'part%d_of_%d.pt'%(self.rank, self.world_size))
 
     def data_to_device(self):
         self.local_features = self.local_features.to(self.device)
         self.local_adj = self.local_adj.to(self.device)
         for i in range(self.world_size):
             self.local_adj_parts[i] = self.local_adj_parts[i].t().coalesce().to(self.device)
-        self.g.labels = self.g.labels.to(self.device)
+        self.g.labels = self.g.labels.float().to(self.device)
 
     @staticmethod
     def split_coo_with_values(adj_matrix, adj_values, node_count, world_size, dim):

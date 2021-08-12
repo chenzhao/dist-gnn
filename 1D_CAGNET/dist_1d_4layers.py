@@ -67,11 +67,12 @@ def broad_func(node_count, am_partitions, inputs, btype=None):
     for i in range(g_env.world_size):
         layer1_use_cache = cur_epoch>=1
 
-        layer2_use_cache = False
+        # layer2_use_cache = cur_epoch>=100 and cur_epoch%2!=0
+        # layer2_use_cache = False
         layer2_warmed = cur_epoch>=50
-        layer2_epsilon = 0.040
+        layer2_epsilon = 0.10
         layer2_baseline = False
-        layer2_use_cache = layer2_warmed and cur_epoch%5>0
+        layer2_use_cache = layer2_warmed and cur_epoch%4>0
 
 
         backward_layer2_use_cache = cur_epoch>=100 and cur_epoch%2!=0
@@ -203,9 +204,10 @@ class GCNFunc(torch.autograd.Function):
         return grad_input, grad_weight, None, None, None, None, None, None
 
 
-def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, local_train_mask, local_labels, epoch):
+def train(inputs, weight1, weight2, weight3, adj_matrix, am_partitions, optimizer, local_train_mask, local_labels, epoch):
     outputs = GCNFunc.apply(inputs, weight1, adj_matrix, am_partitions, F.relu, 'layer1')
-    outputs = GCNFunc.apply(outputs, weight2, adj_matrix, am_partitions, lambda x:F.log_softmax(x, dim=1), 'layer2')
+    outputs = GCNFunc.apply(outputs, weight2, adj_matrix, am_partitions, F.relu, 'layer2')
+    outputs = GCNFunc.apply(outputs, weight3, adj_matrix, am_partitions, lambda x:F.log_softmax(x, dim=1), 'layer3')
 
     optimizer.zero_grad()
 
@@ -239,6 +241,7 @@ def main():
     device = g_env.device
 
     torch.cuda.synchronize()
+    g_data.g.labels = g_data.g.labels.long()
 
     for i in range(args.run_count):
         run = i
@@ -246,13 +249,17 @@ def main():
         weight1_nonleaf = torch.rand(g_data.g.num_features, args.mid_layer, requires_grad=True, device=device)
         weight1_nonleaf.retain_grad()
 
-        weight2_nonleaf = torch.rand(args.mid_layer, g_data.g.num_classes, requires_grad=True, device=device)
+        weight2_nonleaf = torch.rand(args.mid_layer, args.mid_layer, requires_grad=True, device=device)
         weight2_nonleaf.retain_grad()
+
+        weight3_nonleaf = torch.rand(args.mid_layer, g_data.g.num_classes, requires_grad=True, device=device)
+        weight3_nonleaf.retain_grad()
 
         weight1 = Parameter(weight1_nonleaf)
         weight2 = Parameter(weight2_nonleaf)
+        weight3 = Parameter(weight3_nonleaf)
 
-        optimizer = torch.optim.Adam([weight1, weight2], lr=0.01)
+        optimizer = torch.optim.Adam([weight1, weight2, weight3], lr=0.01)
 
         local_train_mask = torch.split(g_data.g.train_mask.bool(), am_pbyp[0].size(0), dim=0)[g_env.rank]
         local_labels = torch.split(g_data.g.labels, am_pbyp[0].size(0), dim=0)[g_env.rank]
@@ -262,7 +269,7 @@ def main():
         for epoch in range(args.epochs):
             cur_epoch = epoch
             g_timer.start('train')
-            outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, local_train_mask, local_labels, epoch)
+            outputs = train(inputs_loc, weight1, weight2, weight3, adj_matrix_loc, am_pbyp, optimizer, local_train_mask, local_labels, epoch)
             g_timer.stop('train')
             # if epoch%10==0:
                 # g_logger.log("Epoch: {:03d}".format(epoch), oneline=True)
@@ -307,7 +314,6 @@ if __name__ == '__main__':
     g_logger.log('dist env inited:', g_env.backend, g_env.world_size)
 
     g_data = DistData(g_env, args.graphname)
-    g_data.g.labels = g_data.g.labels.long()
     # print(g_data.g.labels)
     g_logger.log('dist data inited', args.graphname)
 

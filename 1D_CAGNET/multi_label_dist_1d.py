@@ -1,6 +1,7 @@
 import os
 import math
 import argparse
+import sklearn.metrics
 
 import torch
 import torch.distributed as dist
@@ -54,7 +55,7 @@ cache_features = [None]*8
 cache_layer2 = [None]*8
 cache_backward_layer1 = [None]*8
 cache_backward_layer2 = [None]*8
-cache_enabled = True
+cache_enabled = False
 
 def broad_func(node_count, am_partitions, inputs, btype=None):
     global cache_features
@@ -67,11 +68,12 @@ def broad_func(node_count, am_partitions, inputs, btype=None):
     for i in range(g_env.world_size):
         layer1_use_cache = cur_epoch>=1
 
-        layer2_use_cache = False
+        # layer2_use_cache = cur_epoch>=100 and cur_epoch%2!=0
+        # layer2_use_cache = False
         layer2_warmed = cur_epoch>=50
-        layer2_epsilon = 0.040
-        layer2_baseline = False
-        layer2_use_cache = layer2_warmed and cur_epoch%5>0
+        layer2_epsilon = 0.10
+        layer2_baseline = True
+        layer2_use_cache = layer2_warmed and cur_epoch%2>0
 
 
         backward_layer2_use_cache = cur_epoch>=100 and cur_epoch%2!=0
@@ -99,7 +101,7 @@ def broad_func(node_count, am_partitions, inputs, btype=None):
                         inputs_recv = cache_features[i]
                 else:
                     dist.broadcast(inputs_recv, src=i, group=g_env.world_group)
-                    cache_features[i] = inputs_recv.clone()
+                    # cache_features[i] = inputs_recv.clone()
             elif btype=='layer2':
                 if not layer2_baseline:
                     if g_env.rank==i and cache_layer2[i] is not None:  # loss
@@ -203,16 +205,20 @@ class GCNFunc(torch.autograd.Function):
         return grad_input, grad_weight, None, None, None, None, None, None
 
 
-def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, local_train_mask, local_labels, epoch):
+def train(inputs, weight1, weight2, weight3, adj_matrix, am_partitions, optimizer, local_train_mask, local_labels, epoch):
+# def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, local_train_mask, local_labels, epoch):
     outputs = GCNFunc.apply(inputs, weight1, adj_matrix, am_partitions, F.relu, 'layer1')
-    outputs = GCNFunc.apply(outputs, weight2, adj_matrix, am_partitions, lambda x:F.log_softmax(x, dim=1), 'layer2')
+    # outputs = GCNFunc.apply(outputs, weight2, adj_matrix, am_partitions, F.sigmoid, 'layer2')
+    outputs = GCNFunc.apply(outputs, weight2, adj_matrix, am_partitions, F.sigmoid, 'layer2')
+    outputs = GCNFunc.apply(outputs, weight3, adj_matrix, am_partitions, F.sigmoid, 'layer3')
 
     optimizer.zero_grad()
 
+    loss_func = F.binary_cross_entropy_with_logits
+    loss_func = F.binary_cross_entropy
     if list(local_labels[local_train_mask].size())[0] > 0:
-        # g_logger.log(outputs)
-        # g_logger.log(local_labels)
-        loss = F.nll_loss(outputs[local_train_mask], local_labels[local_train_mask])
+        # print(outputs[local_train_mask][:5], local_labels[local_train_mask][:5])
+        loss = loss_func(outputs[local_train_mask], local_labels[local_train_mask])
         g_logger.log('nll loss:', epoch, loss.item())
         loss.backward()
     else:
@@ -226,8 +232,15 @@ def train(inputs, weight1, weight2, adj_matrix, am_partitions, optimizer, local_
 def test(outputs, vertex_count):
     logits, accs = outputs, []
     for mask in [g_data.g.train_mask, g_data.g.val_mask, g_data.g.test_mask]:
-        pred = logits[mask].max(1)[1]
-        acc = pred.eq(g_data.g.labels[mask]).sum().item() / mask.sum().item()
+        pred = logits[mask]
+        pred[pred > 0.5] = 1
+        pred[pred <= 0.5] = 0
+        # print(pred[:5])
+        # print(g_data.g.labels[mask][:5])
+        # print(pred.eq(g_data.g.labels[mask]).sum().item(),  mask.sum().item())
+        # acc = (pred == g_data.g.labels[mask]).sum().item() / (mask.sum().item()*g_data.g.num_classes )
+        # acc = sklearn.metrics.accuracy_score(pred.cpu(), g_data.g.labels[mask].cpu())
+        acc = sklearn.metrics.f1_score(pred.cpu(), g_data.g.labels[mask].cpu(), average='micro')
         accs.append(acc)
     return accs
 
@@ -249,10 +262,15 @@ def main():
         weight2_nonleaf = torch.rand(args.mid_layer, g_data.g.num_classes, requires_grad=True, device=device)
         weight2_nonleaf.retain_grad()
 
+        weight3_nonleaf = torch.rand(g_data.g.num_classes, g_data.g.num_classes, requires_grad=True, device=device)
+        weight3_nonleaf.retain_grad()
+
         weight1 = Parameter(weight1_nonleaf)
         weight2 = Parameter(weight2_nonleaf)
+        weight3 = Parameter(weight3_nonleaf)
 
-        optimizer = torch.optim.Adam([weight1, weight2], lr=0.01)
+        optimizer = torch.optim.Adam([weight1, weight2, weight3], lr=0.01)
+        # optimizer = torch.optim.Adam([weight1, weight2], lr=0.01)
 
         local_train_mask = torch.split(g_data.g.train_mask.bool(), am_pbyp[0].size(0), dim=0)[g_env.rank]
         local_labels = torch.split(g_data.g.labels, am_pbyp[0].size(0), dim=0)[g_env.rank]
@@ -262,12 +280,13 @@ def main():
         for epoch in range(args.epochs):
             cur_epoch = epoch
             g_timer.start('train')
-            outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, local_train_mask, local_labels, epoch)
+            outputs = train(inputs_loc, weight1, weight2, weight3, adj_matrix_loc, am_pbyp, optimizer, local_train_mask, local_labels, epoch)
+            # outputs = train(inputs_loc, weight1, weight2, adj_matrix_loc, am_pbyp, optimizer, local_train_mask, local_labels, epoch)
             g_timer.stop('train')
             # if epoch%10==0:
                 # g_logger.log("Epoch: {:03d}".format(epoch), oneline=True)
                 
-            if (epoch+1)%5==0:
+            if (epoch+1)%50==0:
                 n_per_proc = math.ceil(g_data.g.features.size(0) / g_env.world_size)
                 output_parts = [torch.zeros(n_per_proc, g_data.g.num_classes, device=g_env.device) for i in range(g_env.world_size)]
 
@@ -295,9 +314,9 @@ if __name__ == '__main__':
     parser.add_argument("--backend", type=str, default="nccl")
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--run_count", type=int, default=1)
-    parser.add_argument("--graphname", type=str, default="SmallerReddit")
+    parser.add_argument("--graphname", type=str, default="Yelp")
     parser.add_argument("--timing", type=bool, default=True)
-    parser.add_argument("--mid_layer", type=int, default=16)
+    parser.add_argument("--mid_layer", type=int, default=64)
     args = parser.parse_args()
     print(args)
     g_env = utils.DistEnv(args.local_rank, args.world_size, args.backend)
@@ -307,7 +326,6 @@ if __name__ == '__main__':
     g_logger.log('dist env inited:', g_env.backend, g_env.world_size)
 
     g_data = DistData(g_env, args.graphname)
-    g_data.g.labels = g_data.g.labels.long()
     # print(g_data.g.labels)
     g_logger.log('dist data inited', args.graphname)
 
