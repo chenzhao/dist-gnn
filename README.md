@@ -25,9 +25,9 @@ python -m torch.distributed.launch --nproc_per_node=4 --master_port 23456 dist_1
 ## dist-gnn
 
 
-The sparse matrix operation in 1D_CAGNET is [SC20] code simplified.
+The sparse matrix operation in 1D_CAGNET is [SC20] code simplified. Check https://github.com/PASSIONLab/CAGNET for dependencies. 
 
-Added some graph data cache and removed PyG dependency. 
+Added some graph data cache and removed PyG dependency for training. 
 
 Graph data cache will be created at the first time run. 
 
