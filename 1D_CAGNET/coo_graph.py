@@ -129,87 +129,14 @@ def main():
     # r = COO_Graph('AmazonProducts')
     # r = COO_Graph('Yelp')
     print(r)
-    #r = COO_Graph('Reddit')
     return 
+
+    # r = COO_Graph('Reddit')
+    # pr = COO_Graph('PartedReddit')
     # r = COO_Graph('SmallerReddit')
     # pr = COO_Graph('PartedSmallerReddit')
-    r = COO_Graph('OneQuarterReddit')
-    pr = COO_Graph('PartedOneQuarterReddit')
-
-    bin_count = torch.bincount(r.DAD_idx[0])
-    degrees_r, _ = torch.sort(bin_count[bin_count>0])
-
-    bin_count = torch.bincount(pr.DAD_idx[0])
-    degrees_pr,_ = torch.sort(bin_count[bin_count>0])
-
-    print(degrees_r.size(), degrees_r)
-    print(degrees_pr.size(), degrees_pr)
-    print(torch.sum(degrees_pr==degrees_r))
-
-
-    return
-    r = COO_Graph('TinyReddit')
-    pr = COO_Graph('PartedTinyReddit')
-    print (torch.sum(r.labels), torch.sum(r.features).item())
-
-    pysum_r = 0.0
-    for i in range(r.features.size(0)):
-        print(i, r.features[i][0])
-        pysum_r += r.features[i][0].item()
-
-    print('pysum r', pysum_r)
-
-    print(pr)
-    set_seed()
-    print (torch.sum(pr.labels), torch.sum(pr.features).item(), sum(pr.features[:,0]).item())
-
-    pysum_pr = 0.0
-    for i in range(pr.features.size(0)):
-        print(i, pr.features[i][0])
-        pysum_pr += pr.features[i][0].item()
-    print('pysum pr', pysum_pr)
-
-    return
-    r = COO_Graph('OneQuarterReddit')
-    pr = COO_Graph('PartedOneQuarterReddit')
-    r = COO_Graph('SmallerReddit')
-    pr = COO_Graph('PartedSmallerReddit')
-    r = COO_Graph('Reddit')
-    pr = COO_Graph('PartedReddit')
-    print(r.features.dtype, pr.features.dtype)
-    fr = r.features[:,0]
-    fpr = pr.features[:,0]
-    sfr, _ = torch.sort(fr)
-    sfpr, _ = torch.sort(fpr)
-    print(torch.nonzero(sfr!=sfpr, as_tuple=False))
-    # print(torch.sort(fpr))
-
-    print(r)
-    set_seed()
-    print (torch.sum(r.labels), torch.sum(r.features).item(), sum(r.features[:,0]).item())
-
-    print(pr)
-    set_seed()
-    print (torch.sum(pr.labels), torch.sum(pr.features).item(), sum(pr.features[:,0]).item())
-    print('sum compare')
-    print('sorted', torch.sum(sfr.clone()).item(), torch.sum(sfpr.clone()).item())
-
-    rfr=sfr[torch.randperm(fr.size()[0])].clone()
-    print(torch.randperm(fpr.size()[0]))
-    rfpr=sfpr[torch.randperm(fpr.size()[0])].clone()
-    print('rand', torch.sum(rfr).item(), torch.sum(rfpr).item())
-
-    rfr=rfr[torch.randperm(rfr.size()[0])].clone()
-    rfpr=rfpr[torch.randperm(rfpr.size()[0])].clone()
-    print('rand again', torch.sum(rfr).item(), torch.sum(rfpr).item())
-
-    pass
-
-    return 
-    sr = COO_Graph('SmallerReddit')
-    psr = COO_Graph('PartedSmallerReddit')
-    r = COO_Graph('Reddit')
-    pr = COO_Graph('PartedReddit')
+    # r = COO_Graph('OneQuarterReddit')
+    # pr = COO_Graph('PartedOneQuarterReddit')
     pass
 
 
