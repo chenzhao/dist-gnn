@@ -1,21 +1,35 @@
-# dist-gnn
-
-
-1D_CAGNET is [SC20] code simplified.
-
-Added some graph data cache and removed PyG dependency. 
-
-Run download_torch_ready_data.py to prepare data.
-
-Run dist_1d to train GCN. Graph data cache will be created at the first time run. 
 
 
 
 # AutoRepeat: Adaptive CommUnicaTiOn REduction for Distributed GraPh NEurAl NeTworks
 
 
+- download datasets
+```
+./download_torch_ready_data.py
+``` 
+- preprocess graph data
+```
+./coo_graph.py
+``` 
+- preprocess graph data
+```
+./coo_graph.py
+```
+- run experiments
+```
+python -m torch.distributed.launch --nproc_per_node=4 --master_port 23456 dist_1d.py --graphname=Reddit --world_size=4 --epochs=300
+```
 
 
+## dist-gnn
+
+
+The sparse matrix operation in 1D_CAGNET is [SC20] code simplified.
+
+Added some graph data cache and removed PyG dependency. 
+
+Graph data cache will be created at the first time run. 
 
 Adaptive bcast result:
 
