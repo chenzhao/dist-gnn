@@ -94,11 +94,11 @@ class COO_Graph:
             print('unknown dataset detected, assign num classes by counting')
             self.num_classes = torch.unique(d['y']).size(0)  # may be predefined
 
-        if d['split']:
+        if 'split' in d:
             self.train_mask = d['split'] == 1
             self.val_mask   = d['split'] == 2
             self.test_mask  = d['split'] == 3
-        elif d['mask']:
+        elif 'mask' in d:
             self.train_mask, self.val_mask, self.test_mask  = d['mask']
         else:
             print('invalid torch data file')
@@ -125,13 +125,13 @@ def set_seed(seed=0):
 def main():
     torch.set_printoptions(precision=10)
 
-    r = COO_Graph('Flickr')
+    r = COO_Graph('Reddit')
+    # r = COO_Graph('Flickr')
     # r = COO_Graph('AmazonProducts')
     # r = COO_Graph('Yelp')
     print(r)
     return 
 
-    # r = COO_Graph('Reddit')
     # pr = COO_Graph('PartedReddit')
     # r = COO_Graph('SmallerReddit')
     # pr = COO_Graph('PartedSmallerReddit')
