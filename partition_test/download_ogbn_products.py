@@ -23,6 +23,7 @@ The only function that matters is the process() function.
 class OgbnProducts(InMemoryDataset):
     def __init__(self, root, transform=None, pre_transform=None):
         super().__init__(root, transform, pre_transform)
+        self.root = root
 
     @property
     def raw_file_names(self):
@@ -40,14 +41,14 @@ class OgbnProducts(InMemoryDataset):
         pass
 
     def process(self):
-        dataset = DglNodePropPredDataset(name="ogbn-products", root=OGB_DIR)
-        
+        dataset = DglNodePropPredDataset(name="ogbn-products", root=self.root)
+
         graph, labels = dataset[0]
         labels = torch.flatten(labels)
         n_nodes = graph.num_nodes()
         split_idx = dataset.get_idx_split()
         train_idx, val_idx, test_idx = split_idx["train"].numpy(), split_idx["valid"].numpy(), split_idx["test"].numpy()
-        
+
         x = graph.ndata['feat'].to(torch.float)
         y = labels.to(torch.long)
         split = numpy.ones(n_nodes, dtype=int)
