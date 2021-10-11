@@ -94,11 +94,11 @@ class DistTimer(DistUtil):
         s = '\ntimer summary:\n' + "\n".join("%6.2fs %6.2fs %s" % (avg_dict[key], std_dict[key], key) for key in avg_dict)
         return s
 
-    # def barrier_all(self):
-    #     return
-    #     self.start('barrier')
-    #     self.env.barrier_all()
-    #     self.stop('barrier')
+    def barrier_all(self):
+        # return
+        # self.start('barrier')
+        self.env.barrier_all()
+        # self.stop('barrier')
 
     def start(self, key: str):
         self.start_time_dict[key] = time.time()
