@@ -17,18 +17,18 @@ from dist_data import DistData
 run = 0
 
 
-def outer_product2(inputs, ag):
+def outer_product2(inputs, ag, btype):
     torch.cuda.synchronize()
 
-    g_timer.start(f'gcn_mm_ep{cur_epoch}')
+    g_timer.start(f'gcn_outermm_{btype}_ep{cur_epoch}')
     grad_weight = torch.mm(inputs, ag) # (H^(l-1))^T * (A * G^l)
     torch.cuda.synchronize()
-    g_timer.stop(f'gcn_mm_ep{cur_epoch}')#, 'comp')
+    g_timer.stop(f'gcn_outermm_{btype}_ep{cur_epoch}')#, 'comp')
 
-    g_timer.start(f'gcn_allreduce_ep{cur_epoch}')
+    g_timer.start(f'gcn_allreduce_{btype}_ep{cur_epoch}')
     dist.all_reduce(grad_weight, op=dist.ReduceOp.SUM, group=g_env.world_group)
     torch.cuda.synchronize()
-    g_timer.stop(f'gcn_allreduce_ep{cur_epoch}')#, 'comm')
+    g_timer.stop(f'gcn_allreduce_{btype}_ep{cur_epoch}')#, 'comm')
     return grad_weight
 
 
@@ -139,13 +139,13 @@ def broad_func(node_count, am_partitions, inputs, btype=None):
         g_timer.barrier_all()
         torch.cuda.synchronize()
 
-        g_timer.start(f'gcn_spmm_ep{cur_epoch}')
+        g_timer.start(f'gcn_spmm_{btype}_ep{cur_epoch}')
         spmm_gpu(am_partitions[i].indices()[0].int(), am_partitions[i].indices()[1].int(),
                         am_partitions[i].values(), am_partitions[i].size(0),
                         am_partitions[i].size(1), inputs_recv, z_loc)
 
         torch.cuda.synchronize()
-        g_timer.stop(f'gcn_spmm_ep{cur_epoch}')#, 'comp')
+        g_timer.stop(f'gcn_spmm_{btype}_ep{cur_epoch}')#, 'comp')
         g_timer.barrier_all()
     return z_loc
 
@@ -160,10 +160,10 @@ class GCNFunc(torch.autograd.Function):
         z = broad_func(adj_matrix.size(0), am_partitions, inputs, btype=btype)
 
         torch.cuda.synchronize()
-        g_timer.start(f'gcn_mm_ep{cur_epoch}')
+        g_timer.start(f'gcn_mm_{btype}_ep{cur_epoch}')
         z = torch.mm(z, weight)
         torch.cuda.synchronize()
-        g_timer.stop(f'gcn_mm_ep{cur_epoch}') #, 'comp')
+        g_timer.stop(f'gcn_mm_{btype}_ep{cur_epoch}') #, 'comp')
 
         z.requires_grad = True
         ctx.z = z
@@ -184,13 +184,13 @@ class GCNFunc(torch.autograd.Function):
         ag = broad_func(adj_matrix.size(0), am_partitions, grad_output, btype='backward_'+btype)
 
         torch.cuda.synchronize()
-        g_timer.start(f'gcn_mm_ep{cur_epoch}')
+        g_timer.start(f'gcn_mm_{ctx.btype}_ep{cur_epoch}')
         grad_input = torch.mm(ag, weight.t())
         torch.cuda.synchronize()
-        g_timer.stop(f'gcn_mm_ep{cur_epoch}')#, 'comp')
+        g_timer.stop(f'gcn_mm_{ctx.btype}_ep{cur_epoch}')#, 'comp')
 
         # Second backprop equation (reuses the A * G^l computation)
-        grad_weight = outer_product2(inputs.t(), ag)
+        grad_weight = outer_product2(inputs.t(), ag, ctx.btype)
 
         return grad_input, grad_weight, None, None, None, None, None, None
 

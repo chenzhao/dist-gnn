@@ -59,7 +59,7 @@ class DistData(DistUtil):
         self.local_adj = self.local_adj.to(self.device)
         for i in range(self.world_size):
             self.local_adj_parts[i] = self.local_adj_parts[i].t().coalesce().to(self.device)
-        self.g.labels = self.g.labels.float().to(self.device)
+        self.g.labels = self.g.labels.to(self.device)
 
     @staticmethod
     def split_coo_with_values(adj_matrix, adj_values, node_count, world_size, dim):
