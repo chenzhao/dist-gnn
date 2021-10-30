@@ -52,7 +52,9 @@ class DistData(DistUtil):
         torch.save(d, self.parted_data_file())
 
     def parted_data_file(self):
-        return os.path.join('..', 'coo_graph_data', self.graph_name, 'parted', 'part%d_of_%d.pt'%(self.rank, self.world_size))
+        self.data_rank = self.rank//self.rep
+        self.data_total_parted = self.world_size//self.rep
+        return os.path.join('..', 'coo_graph_data', self.graph_name, 'parted', 'part%d_of_%d.pt'%(self.data_rank, self.data_total_parted))
 
     def data_to_device(self):
         self.local_features = self.local_features.to(self.device)

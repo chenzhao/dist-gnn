@@ -10,13 +10,21 @@ from collections import defaultdict
 
 
 class DistEnv:
-    def __init__(self, local_rank, world_size, backend='nccl'):
+    def __init__(self, local_rank, world_size, rep=1, backend='nccl'):
         assert(local_rank>=0)
         assert(world_size>0)
-        self.rank, self.world_size  = local_rank, world_size
+        self.rank, self.world_size = local_rank, world_size
+        self.rep = rep
         self.backend = backend
         self.init_device()
         self.init_dist_groups()
+        if self.rep>1:
+            self.init_rep_groups()
+            self.rank_grp = self.rank // self.rep
+            self.rank_col = self.rank % self.rep
+            self.total_grp = self.rank // self.world_size
+            if self.rank_grp >= self.total_grp:
+                raise Exception('invalid args')
 
     def init_device(self):
         self.device = torch.device('cuda', self.rank)
@@ -24,6 +32,21 @@ class DistEnv:
 
     def barrier_all(self):
         dist.barrier(self.world_group)
+
+    def init_rep_groups(self):
+        self.row_procs = []
+        for i in range(0, self.world_size, self.rep):
+            self.row_procs.append(list(range(i, i + self.rep)))
+        self.col_procs = []
+        for i in range(self.rep):
+            self.col_procs.append(list(range(i, self.world_size, self.rep)))
+        row_groups = []
+        for i in range(len(self.row_procs)):
+            self.row_groups.append(dist.new_group(self.row_procs[i]))
+        self.col_groups = []
+        for i in range(len(self.col_procs)):
+            self.col_groups.append(dist.new_group(self.col_procs[i]))
+        return self.row_groups, self.col_groups
 
     def init_dist_groups(self):
         dist.init_process_group(backend=self.backend)
