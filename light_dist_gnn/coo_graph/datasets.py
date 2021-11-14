@@ -52,7 +52,6 @@ def prepare_dgl_dataset(dgl_name, tag):
 
 def prepare_pyg_dataset(pyg_name, tag):
     import torch_geometric
-    import ogb.nodeproppred
     dataset_sources = {'reddit': torch_geometric.datasets.Reddit,
                        'flickr': torch_geometric.datasets.Flickr,
                        'yelp': torch_geometric.datasets.Yelp,

@@ -4,7 +4,6 @@ import torch
 
 import dist_utils
 import dist_train
-import torch.distributed as dist
 
 
 def process_wrapper(rank, args, func):
