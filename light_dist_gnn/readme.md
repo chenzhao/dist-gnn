@@ -4,16 +4,16 @@
 
 #### Code improvements compared with SC20 and original dist-gnn
 
-- SpMM for cuda11. cusparseScsrmm2 is deprecated, for cuda11 we need cusparseSpMM. CUSPARSE_SPMM_COO_ALG4 is used by default because, according to tests with 2080ti and CUDA11.1, other SPMM ALG is much slower.
+- SpMM for cuda11. cusparseScsrmm2 is deprecated, for cuda11 we need cusparseSpMM. CUSPARSE_SPMM_COO_ALG4 is used by default because, according to tests with 2080ti and CUDA11.1, other SPMM algorithms (https://docs.nvidia.com/cuda/cusparse/index.html , search CUSPARSE_SPMM_COO_ALG4)  are much slower.
 - A unified entry. Run main.py to start all workers then, supposedly, they terminate together if any error happens. 
 - Useless code removed.
 - Well-structured.
 
 
 #### Other improvements
-- Padding for last block. When num_nodes is not divisible by n_procs, some dummy nodes with no neighbors are added to make equal tensor sizes. 
+- Padding for marginal blocks. When num_nodes is not divisible by n_procs, some dummy nodes without neighbors are added to make equal tensor sizes. 
 - Unified dataset management. No pyg and dgl dependency for training.
-- More models. A cached GCN. A partially parallel GAT.
+- More models. A cached GCN and a partially parallel GAT.
 - Slightly simpler logger and timer.
 
 
@@ -58,7 +58,7 @@ python ./main.py
 
 
 ##### To use SpMM of cusparse (usually not necessary, but faster).
-For old pytorch versions without sparse-tensor-supported addmm (very rare), this is necessary.
+For old pytorch versions without sparse-tensor-supported addmm, this is necessary.
 
 Build and install the cpp ext (with compilers and cuda paths in env):
 ```
