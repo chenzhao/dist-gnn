@@ -1,8 +1,18 @@
+This repo contains various experimental code for our distributed GNN works.
 
 
 
-# AutoRepeat: Adaptive CommUnicaTiOn REduction for Distributed GraPh NEurAl NeTworks
+For easy-to-use code: https://github.com/chenzhao/dist-gnn/tree/main/light_dist_gnn
 
+
+
+
+
+
+
+
+##### For AutoRepeat: Adaptive CommUnicaTiOn REduction for Distributed GraPh NEurAl NeTworks
+check 1D_CAGNET
 
 - download datasets
 ```
@@ -22,15 +32,6 @@ python -m torch.distributed.launch --nproc_per_node=4 --master_port 23456 dist_1
 ```
 
 
-## dist-gnn
-
-
-The sparse matrix operation in 1D_CAGNET is [SC20] code simplified. Check https://github.com/PASSIONLab/CAGNET for dependencies. 
-
-Added some graph data cache and removed PyG dependency for training. 
-
-Graph data cache will be created at the first time run. 
-
-Adaptive bcast result:
+##### Adaptive bcast result:
 
 https://docs.google.com/presentation/d/1oT5A3Omih0HIg2zS5E8fsN9W2-zKtL8j5f-eb2XJzWc/edit?usp=sharing
