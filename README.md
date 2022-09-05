@@ -1,35 +1,13 @@
+This repo is obsolete. Check https://github.com/chenzhao/light-dist-gnn for our public codes of distributed GNN.
+
+
+
+
 This repo contains various experimental code for our distributed GNN works.
-
-
 
 For easy-to-use code: https://github.com/chenzhao/dist-gnn/tree/main/light_dist_gnn
 
 
-
-
-
-
-
-
-##### For AutoRepeat: Adaptive CommUnicaTiOn REduction for Distributed GraPh NEurAl NeTworks
-check 1D_CAGNET
-
-- download datasets
-```
-./download_torch_ready_data.py
-``` 
-- preprocess graph data
-```
-./coo_graph.py
-``` 
-- preprocess graph data
-```
-./coo_graph.py
-```
-- run experiments
-```
-python -m torch.distributed.launch --nproc_per_node=4 --master_port 23456 dist_1d.py --graphname=Reddit --world_size=4 --epochs=300
-```
 
 
 ##### Adaptive bcast result:
